@@ -17,6 +17,7 @@ import pcb_editor
 import pcb_inspector
 import electrical_editor
 import pipeline
+import schematic_generator
 
 DEFAULT_SCHEMA_DIR: Path = (
     Path.home() / ".gemini" / "antigravity" / "mcp" / "kicad-orchestrator_kicad_mcp"
@@ -431,6 +432,20 @@ def run_electrical_pipeline(
         refill_zones,
         run_drc,
         drc_output_path,
+    )
+
+
+@mcp.tool()
+def create_schematic(
+    output_path: str,
+    project_name: str,
+    components: list[dict[str, Any]],
+    nets: list[dict[str, Any]],
+    title: str = "",
+) -> dict[str, Any]:
+    """Generate a KiCad 10 schematic with embedded symbols, pins, wires, and net labels."""
+    return schematic_generator.create_schematic(
+        output_path, project_name, components, nets, title
     )
 
 

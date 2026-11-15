@@ -1,0 +1,15 @@
+{
+  "name": "create_schematic",
+  "description": "Generate a KiCad 10 schematic with embedded symbols, pins, wires, and net labels.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "output_path": {"type": "string"},
+      "project_name": {"type": "string"},
+      "components": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+      "nets": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+      "title": {"type": "string", "default": ""}
+    },
+    "required": ["output_path", "project_name", "components", "nets"]
+  }
+}
