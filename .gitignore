@@ -1,0 +1,35 @@
+# Python & Virtual Environments
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# KiCad Lock, Backup & History Files
+~*.lck
+*.lck
+*-backups/
+.history/
+fp-info-cache
+*.kicad_prl.bak
+*.kicad_pcb-bak
+*.kicad_sch-bak
+
+# Temporary Test & Scratch Outputs
+test_out/
+test_out*/
+baseline_out/
+*.tmp
+*.log
+
+# OS & Editor Metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/

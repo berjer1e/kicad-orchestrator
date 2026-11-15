@@ -1,0 +1,12 @@
+{
+  "name": "kicad-orchestrator",
+  "displayName": "KiCad Orchestrator",
+  "version": "0.5.0",
+  "description": "Multi-agent KiCad 10 hardware workflow (25 MCP tools): parses BOM/spec files (.txt, .docx, .csv) with board properties and connector details, enforces Step 1.5 Design QA Gate (design_decisions.json), generates footprints and symbols, safely edits PCB layouts/outlines/zones (edit_pcb_layout), routes/clears copper segments & vias with validated net IDs (edit_pcb_traces), autoroutes 2-layer boards with obstacle-aware A* (autoroute_pcb_nets) without pcbnew wxWidgets hangs, performs IPC-2221 trace/neck-down & voltage-drop analysis, audits unrouted pads and mezzanine Z-clearance, runs fast isolated-config ERC/DRC and staged zone refills around GUI locks, and exports Gerber/Drill/STEP/SVG/PDF/3D.",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Запусти kicad-orchestrator для BOM-специфікації або KiCad-проєкту: проведи Design QA Gate, розбери компоненти, згенеруй модулі та перевір плату через kicad-cli",
+    "Проведи повний аудит .kicad_pcb: IPC-2221 товщина/neck-down/ΔU доріжок, нерозведені GND-пади, мезанін Z-зазори/стійки, lock-файли та schematic-parity DRC",
+    "Згенеруй точні футпрінти і символи для Mini560 (THT та SMD 15x18), перерахуй зони та експортуй Gerber, Drill, STEP, SVG і PDF"
+  ]
+}

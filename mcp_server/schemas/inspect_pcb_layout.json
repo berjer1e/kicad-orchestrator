@@ -1,0 +1,1 @@
+{"name":"inspect_pcb_layout","description":"Parse `.kicad_pcb` board bounds, stackup, silkscreen audit, footprints, traces, vias, zones, and locks.","parameters":{"properties":{"pcb_path":{"title":"Pcb Path","type":"string"},"compact":{"default":true,"title":"Compact","type":"boolean"}},"required":["pcb_path"],"title":"inspect_pcb_layoutArguments","type":"object"}}

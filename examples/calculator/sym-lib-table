@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "Calculator_Modules")(type "KiCad")(uri "${KIPRJMOD}/libs/Calculator_Modules.kicad_sym")(options "")(descr "Custom DC-DC and charger modules"))
+)

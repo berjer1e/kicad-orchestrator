@@ -1,0 +1,1 @@
+{"name":"parse_bom","description":"Parse a BOM specification string or file path into components, board properties, and connector details.","parameters":{"properties":{"source":{"title":"Source","type":"string"}},"required":["source"],"title":"parse_bomArguments","type":"object"}}

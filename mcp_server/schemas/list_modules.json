@@ -1,0 +1,1 @@
+{"name":"list_modules","description":"List all supported hardware modules in the parametric `generators` package.","parameters":{"properties":{},"title":"list_modulesArguments","type":"object"}}

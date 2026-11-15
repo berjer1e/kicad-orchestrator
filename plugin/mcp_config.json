@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "kicad_mcp": {
+      "command": "python",
+      "args": [
+        "<KICAD_MCP_ROOT>/server.py"
+      ],
+      "env": {
+        "KICAD_CLI_PATH": "kicad-cli",
+        "KICAD_MCP_ROOT": "<path-to-kicad-orchestrator>/mcp_server",
+        "KICAD_MCP_PYTHON": "python"
+      }
+    }
+  }
+}
