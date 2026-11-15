@@ -17,6 +17,7 @@ import pcb_editor
 import pcb_inspector
 import electrical_editor
 import pipeline
+import project_generator
 import schematic_generator
 
 DEFAULT_SCHEMA_DIR: Path = (
@@ -340,6 +341,26 @@ def generate_module(
 def parse_bom(source: str) -> Any:
     """Parse a BOM specification string or file path into components, board properties, and connector details."""
     return _call_generator("parse_bom_spec", source)
+
+
+@mcp.tool()
+def create_kicad_project(
+    project_dir: str,
+    project_name: str = "LED_Controller",
+    width_mm: float = 100.0,
+    height_mm: float = 80.0,
+    board_thickness_mm: float = 1.6,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Create a new KiCad project and empty PCB outline for subsequent MCP editing."""
+    return project_generator.create_kicad_project(
+        project_dir=project_dir,
+        project_name=project_name,
+        width_mm=width_mm,
+        height_mm=height_mm,
+        board_thickness_mm=board_thickness_mm,
+        overwrite=overwrite,
+    )
 
 
 @mcp.tool()

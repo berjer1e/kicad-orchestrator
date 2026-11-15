@@ -35,6 +35,7 @@ if server is not None:
         "manage_design_decisions": server.manage_design_decisions,
         "list_modules": server.list_modules,
         "parse_bom": server.parse_bom,
+        "create_kicad_project": server.create_kicad_project,
         "edit_pcb_layout": server.edit_pcb_layout,
         "add_nets_to_pcb": server.add_nets_to_pcb,
         "assign_pad_nets": server.assign_pad_nets,
