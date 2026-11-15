@@ -14,10 +14,11 @@ Coordinate KiCad 10 hardware design from specification or existing project to ve
 
 ## Tooling, Disk Cache & Quota Policy
 
-1. **14 Consolidated Tools (`kicad-orchestrator_kicad_mcp` or `run_tool.py`):**
+1. **18 Consolidated Tools (`kicad-orchestrator_kicad_mcp` or `run_tool.py`):**
    - `parse_bom`, `manage_design_decisions`, `list_modules`, `generate_module(module_name, output_dir, kind="both", overrides=None)`
    - `inspect_pcb_layout(pcb_path, compact=True)`, `find_unrouted_pads`, `check_mechanical_fit`, `analyze_pcb_traces`
-   - `edit_pcb_layout`, `edit_pcb_traces`, `autoroute_pcb_nets`, `refill_pcb_zones`
+   - `edit_pcb_layout`, `add_nets_to_pcb`, `assign_pad_nets`, `create_netlist_from_bom`, `apply_netlist_to_pcb`
+   - `edit_pcb_traces`, `autoroute_pcb_nets`, `refill_pcb_zones`
    - `run_validations(target_path, validation_type="drc"|"erc"|"footprint"|"symbol"|"locks"|"version", ...)`
    - `export_project(target_path, output_path, export_type="gerbers"|"drill"|"step"|"sch_pdf"|"pcb_svg"|"3d", ...)`
 2. **Portable CLI Fallback (`run_tool.py`):**
@@ -46,6 +47,11 @@ Coordinate KiCad 10 hardware design from specification or existing project to ve
 ### Step 1.5: Design QA Gate (`design_decisions.json`)
 - Run `manage_design_decisions(project_dir, action="check", bom_or_pcb_path=...)`.
 - If `unresolved_questions` is non-empty, present them cleanly to the user before committing geometry, display/mezzanine mounting, module variants (`Mini560` THT vs SMD `15x18 mm`), connector orientation/keying, copper stackup, or silkscreen conventions, then persist answers with `action="save"`.
+
+### Step 1.75: Electrical Netlist Preparation
+- Convert BOM connectivity into a durable manifest with `create_netlist_from_bom`.
+- Declare all signal and power nets with `add_nets_to_pcb`, then apply every reference/pad connection with `assign_pad_nets`.
+- Do not invoke routing or GND-zone creation until the assignments report no missing pads; pass `current_a` and trace-class metadata from the netlist to trace analysis and routing.
 
 ### Step 2: Conditional Datasheet & Footprint Research (`kicad-searcher`)
 - **Skip `searcher` completely** unless `parse_bom` / `state_summary.json` reveals unknown modules or connectors absent from `list_modules()` and KiCad 10 standard libraries (your KiCad installation's standard library directory).

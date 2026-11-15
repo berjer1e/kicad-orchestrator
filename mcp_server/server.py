@@ -15,6 +15,7 @@ if str(_PACKAGE_DIR) not in sys.path:
 from cli_wrapper import KiCadCLI
 import pcb_editor
 import pcb_inspector
+import electrical_editor
 
 DEFAULT_SCHEMA_DIR: Path = (
     Path.home() / ".gemini" / "antigravity" / "mcp" / "kicad-orchestrator_kicad_mcp"
@@ -354,6 +355,49 @@ def edit_pcb_layout(
         footprint_placements=footprint_placements,
         zones=zones,
         output_path=output_path,
+    )
+
+
+@mcp.tool()
+def add_nets_to_pcb(
+    pcb_path: str,
+    nets: list[str | dict[str, Any]],
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    """Declare electrical nets in a legacy or KiCad 10 inline-net PCB."""
+    return electrical_editor.add_nets_to_pcb(pcb_path, nets, output_path)
+
+
+@mcp.tool()
+def assign_pad_nets(
+    pcb_path: str,
+    assignments: list[dict[str, Any]],
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    """Assign net names to PCB pads using footprint references and pad numbers."""
+    return electrical_editor.assign_pad_nets(pcb_path, assignments, output_path)
+
+
+@mcp.tool()
+def create_netlist_from_bom(
+    output_path: str,
+    nets: list[dict[str, Any]],
+    components: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Write a validated connectivity manifest for schematic, PCB, and routing stages."""
+    return electrical_editor.create_netlist_from_bom(output_path, nets, components)
+
+
+@mcp.tool()
+def apply_netlist_to_pcb(
+    pcb_path: str,
+    netlist_path: str,
+    output_path: str | None = None,
+    gnd_zone: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Apply a netlist manifest to PCB pads and optionally add a GND copper zone."""
+    return electrical_editor.apply_netlist_to_pcb(
+        pcb_path, netlist_path, output_path, gnd_zone
     )
 
 

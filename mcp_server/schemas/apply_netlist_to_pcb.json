@@ -1,0 +1,20 @@
+{
+  "name": "apply_netlist_to_pcb",
+  "description": "Apply a netlist manifest to PCB pads and optionally add a GND copper zone.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "pcb_path": {"type": "string"},
+      "netlist_path": {"type": "string"},
+      "output_path": {
+        "anyOf": [{"type": "string"}, {"type": "null"}],
+        "default": null
+      },
+      "gnd_zone": {
+        "anyOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}],
+        "default": null
+      }
+    },
+    "required": ["pcb_path", "netlist_path"]
+  }
+}

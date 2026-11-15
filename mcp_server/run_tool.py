@@ -28,6 +28,10 @@ _TOOLS: dict[str, Any] = {
     "list_modules": server.list_modules,
     "parse_bom": server.parse_bom,
     "edit_pcb_layout": server.edit_pcb_layout,
+    "add_nets_to_pcb": server.add_nets_to_pcb,
+    "assign_pad_nets": server.assign_pad_nets,
+    "create_netlist_from_bom": server.create_netlist_from_bom,
+    "apply_netlist_to_pcb": server.apply_netlist_to_pcb,
     "edit_pcb_traces": server.edit_pcb_traces,
     "autoroute_pcb_nets": server.autoroute_pcb_nets,
 }

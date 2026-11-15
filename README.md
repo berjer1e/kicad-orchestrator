@@ -40,7 +40,7 @@ Full automated verification output for the Calculator board is saved in [`./exam
 ```text
 kicad-orchestrator/
 ├── mcp_server/                 # FastMCP server + S-expression PCB inspector + editor + generators
-│   ├── server.py               # 14 consolidated FastMCP tools + compact schema sync helper
+│   ├── server.py               # 18 consolidated FastMCP tools + compact schema sync helper
 │   ├── run_tool.py             # Direct CLI dispatcher, `--sync-schemas`, and `--save-state-summary`
 │   ├── api_delegate.py         # Gemini Interactions & Antigravity SDK delegator (`gemini-3.5-flash-lite` .. `gemini-4-carbon`)
 │   ├── cli_wrapper.py          # KiCad 10 `kicad-cli.exe` wrapper with isolated config & lock-safe staging
@@ -73,7 +73,7 @@ kicad-orchestrator/
 
 ## Architecture: 14 Consolidated MCP Tools (`v0.5.0`)
 
-All 14 consolidated tools are exposed via FastMCP (`mcp_server/server.py`) with compact 1-sentence schema descriptions (`mcp_server/schemas/*.json`, ~8.7 KB total), compact/failures-first inspection defaults (`inspect_pcb_layout(compact=True)`), one-shot disk caching (`run_tool.py --save-state-summary`), and Gemini SDK subtask delegation (`mcp_server/api_delegate.py`).
+All 18 consolidated tools are exposed via FastMCP (`mcp_server/server.py`) with compact 1-sentence schema descriptions (`mcp_server/schemas/*.json`), compact/failures-first inspection defaults (`inspect_pcb_layout(compact=True)`), one-shot disk caching (`run_tool.py --save-state-summary`), electrical netlist preparation (`create_netlist_from_bom`, `apply_netlist_to_pcb`, `add_nets_to_pcb`, `assign_pad_nets`), and Gemini SDK subtask delegation (`mcp_server/api_delegate.py`).
 
 ### 0. Safe S-Expression PCB Editing & 2-Layer A* Autorouting (`pcb_editor.py`)
 | Tool | Key Parameters | Purpose |
