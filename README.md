@@ -147,6 +147,21 @@ The [`plugin/`](./plugin/) bundle (`v0.3.0`) coordinates five specialized agents
 - **KiCad 10.0+** installed (the `kicad-cli` executable available on your PATH)
 - **Python 3.11+**
 
+### Host Integration
+
+The repository is split into a client-independent MCP backend and host-specific prompt
+adapters. Read [`AGENTS.md`](./AGENTS.md) first. Antigravity can load the native `swarm`
+Skill; OpenCode, Codex, and Claude Code can use the files under [`adapters/`](./adapters/).
+When a host cannot create subagents, use the deterministic fallback:
+
+```powershell
+python mcp_server/doctor.py --json
+python mcp_server/run_tool.py run_electrical_pipeline --args '{\"pcb_path\":\"path\\to\\board.kicad_pcb\"}'
+```
+
+Subagent availability is controlled by the host, quota, and permissions. MCP itself does not
+spawn workers, so every workflow has a single-agent fallback.
+
 ### 2. Set Up the MCP Server Virtual Environment
 ```powershell
 git clone https://github.com/berjer1e/kicad-orchestrator.git

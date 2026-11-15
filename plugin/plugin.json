@@ -1,8 +1,8 @@
 {
   "name": "kicad-orchestrator",
   "displayName": "KiCad Orchestrator",
-  "version": "0.5.0",
-  "description": "KiCad 10 hardware workflow (20 MCP tools): parses BOM/spec files (.txt, .docx, .csv), generates embedded schematics plus footprints and symbols, applies netlists and pad assignments, safely edits PCB layouts/outlines/zones, routes and audits traces, checks IPC-2221/mechanical fit/unrouted pads, runs ERC/DRC and staged zone refills around GUI locks, and exports Gerber/Drill/STEP/SVG/PDF/3D.",
+  "version": "0.6.0",
+  "description": "Host-agnostic KiCad 10 workflow: MCP backend plus Skills/Swarm coordinator with deterministic single-agent fallback, embedded schematic generation, netlists, PCB routing, ERC/DRC, mechanical checks, and manufacturing exports.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
     "Запусти kicad-orchestrator для BOM-специфікації або KiCad-проєкту: проведи Design QA Gate, розбери компоненти, згенеруй модулі та перевір плату через kicad-cli",
