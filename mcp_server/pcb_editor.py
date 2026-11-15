@@ -563,8 +563,6 @@ def add_footprints_to_pcb(
             errors.append(f"Duplicate reference: {ref}")
             continue
         raw = fp_path.read_text(encoding="utf-8")
-        # Library files have the footprint as their root expression, while
-        # the board scanner intentionally looks one level below the root.
         fp_blocks = _extract_top_level_blocks(f"(library\n{raw}\n)\n", {"footprint"})
         if not fp_blocks:
             errors.append(f"No footprint block found: {fp_path}")

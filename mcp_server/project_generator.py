@@ -14,6 +14,7 @@ from typing import Any
 
 
 def _uid() -> str:
+    """Return a new UUID4 string for KiCad S-expression nodes."""
     return str(uuid.uuid4())
 
 
