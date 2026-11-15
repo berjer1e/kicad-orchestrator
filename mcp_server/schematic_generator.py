@@ -232,12 +232,12 @@ def create_schematic(
         right = [pin for index, pin in enumerate(pins) if index % 2 == 1]
         for index, pin in enumerate(left):
             positions[(str(component["reference"]), str(pin["number"]))] = (
-                float(x) - 17.78,
+                float(x) - 12.7,
                 float(y) + (len(left) - 1 - index) * 2.54,
             )
         for index, pin in enumerate(right):
             positions[(str(component["reference"]), str(pin["number"]))] = (
-                float(x) + 17.78,
+                float(x) + 12.7,
                 float(y) + (len(right) - 1 - index) * 2.54,
             )
 
