@@ -8,6 +8,7 @@ long sequence of tool calls.
 from __future__ import annotations
 
 from pathlib import Path
+import json
 from typing import Any, Callable
 
 try:
@@ -49,6 +50,20 @@ def _compact(result: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def _inspection_failures(result: dict[str, Any]) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+    if result.get("passed") is False:
+        failures.append(
+            {
+                "kind": "unrouted_pads",
+                "summary": result.get("unrouted_summary_by_net", {}),
+                "zone_only_pads": result.get("zone_only_pads", [])[:20],
+                "completely_unrouted_pads": result.get("completely_unrouted_pads", [])[:20],
+            }
+        )
+    return failures
+
+
 def run_electrical_pipeline(
     pcb_path: str,
     netlist_path: str | None = None,
@@ -68,6 +83,8 @@ def run_electrical_pipeline(
     if not source.is_file():
         raise FileNotFoundError(f"PCB file does not exist: {source}")
     phases: list[dict[str, Any]] = []
+    netlist_summary: dict[str, Any] | None = None
+    missing_assignments: list[dict[str, Any]] = []
     lock_result = _phase(
         phases,
         "locks",
@@ -78,6 +95,15 @@ def run_electrical_pipeline(
 
     current_path = output_path or str(source)
     if netlist_path:
+        netlist_file = Path(netlist_path).expanduser().resolve()
+        payload = json.loads(netlist_file.read_text(encoding="utf-8"))
+        netlist_summary = {
+            "path": str(netlist_file),
+            "net_count": len(payload.get("nets", [])),
+            "connection_count": sum(
+                len(item.get("connections", [])) for item in payload.get("nets", [])
+            ),
+        }
         applied = _phase(
             phases,
             "netlist",
@@ -89,7 +115,14 @@ def run_electrical_pipeline(
             ),
         )
         if applied.get("status") == "error":
-            return {"status": "error", "phases": phases}
+            return {
+                "status": "error",
+                "phases": phases,
+                "netlist": netlist_summary,
+                "missing_assignments": applied.get("missing_assignments", []),
+                "inspection_failures": [],
+            }
+        missing_assignments = applied.get("missing_assignments", [])
         current_path = str(applied.get("saved_path", current_path))
 
     if route:
@@ -106,7 +139,13 @@ def run_electrical_pipeline(
             ),
         )
         if route_result.get("status") == "error":
-            return {"status": "error", "phases": phases}
+            return {
+                "status": "error",
+                "phases": phases,
+                "netlist": netlist_summary,
+                "missing_assignments": missing_assignments,
+                "inspection_failures": [],
+            }
         current_path = str(route_result.get("saved_path", current_path))
 
     if refill_zones:
@@ -120,7 +159,13 @@ def run_electrical_pipeline(
             lambda: KiCadCLI().refill_pcb_zones(current_path, output_path=current_path),
         )
         if refill_result.get("status") == "error":
-            return {"status": "error", "phases": phases}
+            return {
+                "status": "error",
+                "phases": phases,
+                "netlist": netlist_summary,
+                "missing_assignments": missing_assignments,
+                "inspection_failures": [],
+            }
 
     inspection = _phase(
         phases,
@@ -148,10 +193,14 @@ def run_electrical_pipeline(
         )
 
     failed = any(item["status"] == "error" for item in phases)
+    inspection_failures = _inspection_failures(inspection)
     return {
         "status": "error" if failed else "ok",
         "saved_path": current_path,
         "phases": phases,
+        "netlist": netlist_summary,
+        "missing_assignments": missing_assignments,
+        "inspection_failures": inspection_failures,
         "inspection": _compact(inspection),
         "validation": _compact(validation) if validation else None,
     }
