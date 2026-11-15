@@ -32,6 +32,7 @@ _TOOLS: dict[str, Any] = {
     "assign_pad_nets": server.assign_pad_nets,
     "create_netlist_from_bom": server.create_netlist_from_bom,
     "apply_netlist_to_pcb": server.apply_netlist_to_pcb,
+    "run_electrical_pipeline": server.run_electrical_pipeline,
     "edit_pcb_traces": server.edit_pcb_traces,
     "autoroute_pcb_nets": server.autoroute_pcb_nets,
 }

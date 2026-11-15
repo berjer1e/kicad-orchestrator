@@ -1,0 +1,22 @@
+{
+  "name": "run_electrical_pipeline",
+  "description": "Run the deterministic electrical PCB pipeline in one bounded call.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "pcb_path": {"type": "string"},
+      "netlist_path": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
+      "output_path": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
+      "gnd_zone": {"anyOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}], "default": null},
+      "route": {"type": "boolean", "default": false},
+      "nets": {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}], "default": null},
+      "grid_step_mm": {"type": "number", "default": 0.5},
+      "trace_width_mm": {"type": "number", "default": 0.3},
+      "clearance_mm": {"type": "number", "default": 0.25},
+      "refill_zones": {"type": "boolean", "default": false},
+      "run_drc": {"type": "boolean", "default": false},
+      "drc_output_path": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null}
+    },
+    "required": ["pcb_path"]
+  }
+}

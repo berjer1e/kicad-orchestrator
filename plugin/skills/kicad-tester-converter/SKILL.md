@@ -17,17 +17,9 @@ Your job is to **verify every artifact** with `kicad-cli.exe` and the PCB inspec
 
 Use `call_mcp_tool` with the exact KiCad `<serverName>` from `<mcp_servers>` (typically `kicad-orchestrator_kicad_mcp`). **Do NOT call `list_resources`** (this server exposes tools only).
 
-If `call_mcp_tool` is unavailable inside a restricted subagent sandbox, invoke the exact same tools cleanly via `run_command` using `$env:KICAD_MCP_ROOT` and `$env:KICAD_MCP_PYTHON` (configured in `mcp_config.json`, with safe defaults if unset):
-
-```powershell
-$mcpRoot = if ($env:KICAD_MCP_ROOT) { $env:KICAD_MCP_ROOT } else { Join-Path $env:USERPROFILE "Documents\.py\kicad_mcp" }
-$mcpPy   = if ($env:KICAD_MCP_PYTHON) { $env:KICAD_MCP_PYTHON } else { Join-Path $mcpRoot ".venv\Scripts\python.exe" }
-$argsJson = (@{ pcb_path = "path\to\board.kicad_pcb" } | ConvertTo-Json -Compress -Depth 5)
-if ($PSVersionTable.PSVersion.Major -lt 7) { $argsJson = $argsJson -replace '"', '\"' }
-& $mcpPy (Join-Path $mcpRoot "run_tool.py") <tool_name> --args $argsJson
-```
-
-For no-argument tools (`list_modules`), omit `--args` (or pass `--args '{}'`). If `<project_dir>/output/state_summary.json` exists from Step 1, read it from disk before calling inspection tools.
+If MCP is unavailable, invoke `mcp_server/run_tool.py` with compact JSON arguments.
+Follow [`../shared/WORKFLOW.md`](../shared/WORKFLOW.md); read
+`<project_dir>/output/state_summary.json` before repeating inspections.
 
 ## Mandatory Pre-Flight & Export Rules
 
