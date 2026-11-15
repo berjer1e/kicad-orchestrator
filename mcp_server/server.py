@@ -364,6 +364,18 @@ def create_kicad_project(
 
 
 @mcp.tool()
+def add_footprints_to_pcb(
+    pcb_path: str,
+    footprints: list[dict[str, Any]],
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    """Insert generated `.kicad_mod` footprints into a PCB at explicit positions."""
+    return pcb_editor.add_footprints_to_pcb(
+        pcb_path=pcb_path, footprints=footprints, output_path=output_path
+    )
+
+
+@mcp.tool()
 def edit_pcb_layout(
     pcb_path: str,
     board_outline: dict[str, Any] | None = None,

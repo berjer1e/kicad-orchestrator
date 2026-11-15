@@ -536,6 +536,58 @@ def edit_pcb_layout(
     }
 
 
+def add_footprints_to_pcb(
+    pcb_path: str,
+    footprints: list[dict[str, Any]],
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    """Insert library `.kicad_mod` footprints into a board at explicit coordinates.
+
+    Each item requires `fp_path`, `reference`, `x`, and `y`; `value` and
+    `rotation` are optional.  The source board is never changed when
+    `output_path` is supplied.
+    """
+    source, dest, lock_info = _resolve_target_and_output(pcb_path, output_path, suffix="_footprints")
+    text = source.read_text(encoding="utf-8")
+    existing_refs = set(re.findall(r'\(property\s+"Reference"\s+"([^"]+)"', text))
+    blocks: list[str] = []
+    added: list[str] = []
+    errors: list[str] = []
+    for item in footprints:
+        fp_path = Path(str(item.get("fp_path", ""))).expanduser().resolve()
+        ref = str(item.get("reference", "")).strip()
+        if not fp_path.is_file() or not ref or "x" not in item or "y" not in item:
+            errors.append(f"Invalid footprint item: {item}")
+            continue
+        if ref in existing_refs or ref in added:
+            errors.append(f"Duplicate reference: {ref}")
+            continue
+        raw = fp_path.read_text(encoding="utf-8")
+        # Library files have the footprint as their root expression, while
+        # the board scanner intentionally looks one level below the root.
+        fp_blocks = _extract_top_level_blocks(f"(library\n{raw}\n)\n", {"footprint"})
+        if not fp_blocks:
+            errors.append(f"No footprint block found: {fp_path}")
+            continue
+        block = fp_blocks[0][3]
+        rotation = float(item.get("rotation", 0.0))
+        at = f"\n\t(at {float(item['x']):g} {float(item['y']):g}"
+        if rotation:
+            at += f" {rotation:g}"
+        at += ")"
+        block = re.sub(r'(\n\s+\(layer\s+"[^"]+"\))', rf"\1{at}", block, count=1)
+        block = re.sub(r'(\(property\s+"Reference"\s+")([^"]+)(")', rf'\g<1>{ref}\g<3>', block, count=1)
+        if item.get("value") is not None:
+            block = re.sub(r'(\(property\s+"Value"\s+")([^"]+)(")', rf'\g<1>{str(item["value"])}\g<3>', block, count=1)
+        block = re.sub(r'\(uuid\s+"[^"]+"\)', lambda _: f'(uuid "{uuid.uuid4()}")', block)
+        blocks.append(block)
+        added.append(ref)
+    if errors:
+        return {"status": "error", "errors": errors, "added_footprints": added}
+    dest.write_text(_insert_before_board_end(text, blocks), encoding="utf-8")
+    return {"status": "ok" if dest == source else "ok_staged", "source_pcb": str(source), "saved_path": str(dest), "added_footprints": added, "lock_files": lock_info.get("lock_files", [])}
+
+
 def _item_matches_removal(
     block: str,
     clear_net_ids: set[int],

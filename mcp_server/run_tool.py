@@ -36,6 +36,7 @@ if server is not None:
         "list_modules": server.list_modules,
         "parse_bom": server.parse_bom,
         "create_kicad_project": server.create_kicad_project,
+        "add_footprints_to_pcb": server.add_footprints_to_pcb,
         "edit_pcb_layout": server.edit_pcb_layout,
         "add_nets_to_pcb": server.add_nets_to_pcb,
         "assign_pad_nets": server.assign_pad_nets,
