@@ -442,7 +442,7 @@ def run_electrical_pipeline(
     netlist_path: str | None = None,
     output_path: str | None = None,
     gnd_zone: dict[str, Any] | None = None,
-    route: bool = False,
+    route: bool = True,
     nets: list[str] | None = None,
     grid_step_mm: float = 0.5,
     trace_width_mm: float = 0.3,
@@ -450,8 +450,11 @@ def run_electrical_pipeline(
     refill_zones: bool = False,
     run_drc: bool = False,
     drc_output_path: str | None = None,
+    create_if_missing: bool = True,
+    width_mm: float = 100.0,
+    height_mm: float = 80.0,
 ) -> dict[str, Any]:
-    """Run the deterministic electrical PCB pipeline in one bounded call."""
+    """Run the deterministic electrical PCB pipeline (init, netlist, A* autorouting, inspection, DRC) in one call."""
     return pipeline.run_electrical_pipeline(
         pcb_path,
         netlist_path,
@@ -465,6 +468,9 @@ def run_electrical_pipeline(
         refill_zones,
         run_drc,
         drc_output_path,
+        create_if_missing,
+        width_mm,
+        height_mm,
     )
 
 

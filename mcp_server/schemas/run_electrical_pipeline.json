@@ -8,14 +8,17 @@
       "netlist_path": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
       "output_path": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
       "gnd_zone": {"anyOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}], "default": null},
-      "route": {"type": "boolean", "default": false},
+      "route": {"type": "boolean", "default": true},
       "nets": {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}], "default": null},
       "grid_step_mm": {"type": "number", "default": 0.5},
       "trace_width_mm": {"type": "number", "default": 0.3},
       "clearance_mm": {"type": "number", "default": 0.25},
       "refill_zones": {"type": "boolean", "default": false},
       "run_drc": {"type": "boolean", "default": false},
-      "drc_output_path": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null}
+      "drc_output_path": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
+      "create_if_missing": {"type": "boolean", "default": true},
+      "width_mm": {"type": "number", "default": 100.0},
+      "height_mm": {"type": "number", "default": 80.0}
     },
     "required": ["pcb_path"]
   }

@@ -20,10 +20,12 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _check(name: str, ok: bool, detail: str) -> dict[str, Any]:
+    """Format a single diagnostic check item."""
     return {"name": name, "ok": ok, "detail": detail}
 
 
 def diagnose() -> dict[str, Any]:
+    """Run environment and installation diagnostics for Python, MCP, schemas, and `kicad-cli`."""
     checks: list[dict[str, Any]] = [
         _check("python", sys.version_info >= (3, 11), sys.version.split()[0]),
         _check(
@@ -32,8 +34,10 @@ def diagnose() -> dict[str, Any]:
             "installed" if importlib.util.find_spec("mcp") else "missing; install mcp_server/requirements.txt",
         ),
     ]
+    kicad_cli_ok = False
     try:
         cli = discover_kicad_cli()
+        kicad_cli_ok = True
         checks.append(_check("kicad_cli", True, str(cli)))
     except FileNotFoundError as exc:
         checks.append(_check("kicad_cli", False, str(exc)))
@@ -54,14 +58,18 @@ def diagnose() -> dict[str, Any]:
     )
     checks.append(_check("mcp_config", (ROOT / "plugin" / "mcp_config.json").is_file(), "present"))
     checks.append(_check("agent_contract", (ROOT / "AGENTS.md").is_file(), "present"))
+    core_ok = all(item["ok"] for item in checks if item["name"] != "kicad_cli")
     return {
-        "status": "ok" if all(item["ok"] for item in checks) else "blocked",
+        "status": "ok" if (core_ok and kicad_cli_ok) else ("degraded_no_kicad_cli" if core_ok else "blocked"),
+        "offline_s_expr_tools_ready": core_ok,
+        "kicad_cli_ready": kicad_cli_ok,
         "checks": checks,
         "kicad_cli_path_env": os.environ.get("KICAD_CLI_PATH"),
     }
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for `doctor.py`."""
     parser = argparse.ArgumentParser(description="Diagnose KiCad MCP host setup.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     args = parser.parse_args(argv)

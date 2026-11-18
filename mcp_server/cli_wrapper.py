@@ -60,6 +60,57 @@ class KiCadCLIError(RuntimeError):
         self.stderr = stderr
 
 
+def _iter_default_kicad_cli_candidates() -> list[Path]:
+    """Build prioritized candidate paths for `kicad-cli` across Windows, macOS, and Linux.
+
+    Returns:
+        Ordered list of candidate `Path` objects with newest KiCad versions first.
+    """
+    found: list[Path] = list(DEFAULT_KICAD_CLI_PATHS)
+    win_roots: list[Path] = []
+    for env_key in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        val = os.environ.get(env_key)
+        if val:
+            base = Path(val)
+            win_roots.append(base / "KiCad")
+            win_roots.append(base / "Programs" / "KiCad")
+    win_roots.extend(
+        [
+            Path(r"C:\Program Files\KiCad"),
+            Path(r"C:\Program Files (x86)\KiCad"),
+            Path.home() / "AppData" / "Local" / "Programs" / "KiCad",
+        ]
+    )
+    seen_dirs: set[Path] = set()
+    for kicad_root in win_roots:
+        if kicad_root in seen_dirs or not kicad_root.is_dir():
+            continue
+        seen_dirs.add(kicad_root)
+        try:
+            ver_dirs = sorted(
+                (d for d in kicad_root.iterdir() if d.is_dir()),
+                key=lambda p: p.name,
+                reverse=True,
+            )
+        except OSError:
+            ver_dirs = []
+        for ver_dir in ver_dirs:
+            found.append(ver_dir / "bin" / "kicad-cli.exe")
+        found.append(kicad_root / "bin" / "kicad-cli.exe")
+
+    found.extend(
+        [
+            Path.home() / "scoop" / "apps" / "kicad" / "current" / "bin" / "kicad-cli.exe",
+            Path("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"),
+            Path.home() / "Applications" / "KiCad" / "KiCad.app" / "Contents" / "MacOS" / "kicad-cli",
+            Path("/usr/bin/kicad-cli"),
+            Path("/usr/local/bin/kicad-cli"),
+            Path("/snap/bin/kicad-cli"),
+        ]
+    )
+    return found
+
+
 def discover_kicad_cli(explicit_path: str | Path | None = None) -> Path:
     """Locate `kicad-cli.exe` via explicit path, environment variable, default installs, or PATH.
 
@@ -77,7 +128,7 @@ def discover_kicad_cli(explicit_path: str | Path | None = None) -> Path:
     if env_path:
         candidates.append(Path(env_path))
 
-    candidates.extend(DEFAULT_KICAD_CLI_PATHS)
+    candidates.extend(_iter_default_kicad_cli_candidates())
 
     for candidate in candidates:
         if candidate.is_file():
@@ -89,7 +140,11 @@ def discover_kicad_cli(explicit_path: str | Path | None = None) -> Path:
             return Path(found)
 
     raise FileNotFoundError(
-        "Could not locate kicad-cli.exe. Set KICAD_CLI_PATH or install KiCad 10.0."
+        "Could not locate kicad-cli.exe (checked KICAD_CLI_PATH, standard KiCad install directories, and PATH). "
+        "Set KICAD_CLI_PATH or install KiCad 10.0+. "
+        "Offline Python tools (create_kicad_project, create_schematic, create_netlist_from_bom, "
+        "add_footprints_to_pcb, edit_pcb_layout, autoroute_pcb_nets, inspect_pcb_layout, "
+        "find_unrouted_pads, analyze_pcb_traces, check_mechanical_fit) remain available without kicad-cli."
     )
 
 

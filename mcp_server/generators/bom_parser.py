@@ -277,10 +277,12 @@ def _is_bom_subheader(line: str) -> bool:
 
 
 _PROSE_COMPONENT_HINT = re.compile(
-    r"(?:шт\.?|штук|комплект|пФ|нФ|мкФ|кОм|Ом|МГц|pF|nF|uF|kOhm|MHz|"
-    r"ATmega|74HC\d+|PCF8574|LCD\s*2004|Keypad|1N4148|1N4007|18650|TP4056|HW-?373|"
-    r"MT3608|Mini[-\s]?360|Mini[-\s]?560|XH2\.54|KF301|PLS|PBS|PinHeader|FemaleHeader|"
-    r"DIP-\d+|HC-49|Тумблер|Панелька|Резистор|Конденсатор|Кварц|Діод|Дисплей|Зарядка|"
+    r"(?:шт\.?|штук|комплект|pcs|pc|пФ|нФ|мкФ|кОм|Ом|МГц|pF|nF|uF|kOhm|Ohm|MHz|"
+    r"ATmega|ESP32|Pico|BME280|AMS1117|74HC\d+|PCF8574|LCD\s*\d+|Keypad|1N4148|1N4007|18650|TP4056|HW-?373|"
+    r"MT3608|Mini[-\s]?360|Mini[-\s]?560|XH2\.54|JST|KF301|PLS|PBS|PinHeader|FemaleHeader|"
+    r"DIP-\d+|SOIC-\d+|TSSOP-\d+|QFP-\d+|SOT-\d+|TO-\d+|0402|0603|0805|1206|HC-49|"
+    r"Resistor|Capacitor|Crystal|Diode|Switch|Button|Connector|Header|MOSFET|Transistor|Regulator|Module|"
+    r"Тумблер|Панелька|Резистор|Конденсатор|Кварц|Діод|Дисплей|Зарядка|"
     r"Перетворювач|Вимикач|Мікроконтролер|Акумулятор|Конектор|роз['’`]?єм|клемник|Зсувн|"
     r"Перфорована плата|2-pin|4-pin|8-pin)",
     re.IGNORECASE,
@@ -549,7 +551,7 @@ def _parse_component_line(line: str) -> dict[str, Any] | None:
                 desc_part = m_bullet.group(1).strip()
             else:
                 m_num = re.match(
-                    r"^\d+\.\s*(?:\[\s*[xX ]?\s*\]\s*)?(?:([A-Za-z][A-Za-z0-9_]*)\s*[:\-]\s*)?(.+)$",
+                    r"^(?:\d+\.|[-*•])\s*(?:\[\s*[xX ]?\s*\]\s*)?(?:([A-Za-z][A-Za-z0-9_]*(?:\s*(?:,|\.\.|-)\s*[A-Za-z0-9_]+)*)\s*[:\-]\s*)?(.+)$",
                     stripped,
                 )
                 if m_num and _PROSE_COMPONENT_HINT.search(m_num.group(2)):
@@ -560,7 +562,7 @@ def _parse_component_line(line: str) -> dict[str, Any] | None:
                     if (
                         m_prose
                         and not re.match(
-                            r"^(?:ПРОЕКТ|ОПИС|Footprint|Пін|Pin|Короткий гайд|Важливе питання)\b",
+                            r"^(?:ПРОЕКТ|ПРОЄКТ|PROJECT|TITLE|ОПИС|DESCRIPTION|OVERVIEW|SUMMARY|Footprint|Пін|Pin|Короткий гайд|Quick guide|Важливе питання|Note)\b",
                             m_prose.group(1).strip(),
                             re.IGNORECASE,
                         )
@@ -654,7 +656,9 @@ def parse_bom_spec(source: str) -> dict[str, Any]:
             last_note_kind = None
             continue
 
-        m_proj = re.match(r"^ПРОЕКТ\s*:?\s*(.+)$", line, re.IGNORECASE)
+        m_proj = re.match(
+            r"^(?:ПРОЕКТ|ПРОЄКТ|PROJECT|TITLE)\s*:?\s*(.+)$", line, re.IGNORECASE
+        )
         if m_proj:
             title = m_proj.group(1).strip()
             titles.append(title)
@@ -665,7 +669,9 @@ def parse_bom_spec(source: str) -> dict[str, Any]:
             last_note_kind = None
             continue
 
-        m_desc = re.match(r"^ОПИС\s*:?\s*(.+)$", line, re.IGNORECASE)
+        m_desc = re.match(
+            r"^(?:ОПИС|DESCRIPTION|OVERVIEW|SUMMARY)\s*:?\s*(.+)$", line, re.IGNORECASE
+        )
         if m_desc:
             current_mode = "header"
             if current_revision is not None:
@@ -676,9 +682,16 @@ def parse_bom_spec(source: str) -> dict[str, Any]:
 
         if (
             re.match(r"^\[\d+\]\s+", line)
-            or "BOM-ЛИСТ" in line.upper()
-            or (current_mode in ("general", "bom") and re.match(r"^\d+\.\s+\S", line) and not _PROSE_COMPONENT_HINT.search(line.split(":")[0]))
-            or re.match(r"^Короткий гайд\b", line, re.IGNORECASE)
+            or any(
+                tok in line.upper()
+                for tok in ("BOM-ЛИСТ", "BILL OF MATERIALS", "BOM LIST", "COMPONENT LIST")
+            )
+            or (current_mode in ("general", "bom") and re.match(r"^\d+\.\s+\S", line) and not _PROSE_COMPONENT_HINT.search(line))
+            or re.match(
+                r"^(?:Короткий гайд|Quick guide|Design guide|Layout guide|Engineering rules)\b",
+                line,
+                re.IGNORECASE,
+            )
         ):
             sections.append(line)
             if current_revision is not None:

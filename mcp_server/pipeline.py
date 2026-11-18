@@ -15,8 +15,9 @@ try:
     import electrical_editor
     import pcb_editor
     import pcb_inspector
+    import project_generator
 except ImportError:
-    from . import electrical_editor, pcb_editor, pcb_inspector
+    from . import electrical_editor, pcb_editor, pcb_inspector, project_generator
 
 
 def _phase(
@@ -24,6 +25,7 @@ def _phase(
     name: str,
     action: Callable[[], dict[str, Any]],
 ) -> dict[str, Any]:
+    """Execute one pipeline stage and append its status entry to `phases`."""
     try:
         result = action()
     except Exception as exc:
@@ -51,6 +53,7 @@ def _compact(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _inspection_failures(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract bounded unrouted-pad failure summaries from an inspection result."""
     failures: list[dict[str, Any]] = []
     if result.get("passed") is False:
         failures.append(
@@ -69,7 +72,7 @@ def run_electrical_pipeline(
     netlist_path: str | None = None,
     output_path: str | None = None,
     gnd_zone: dict[str, Any] | None = None,
-    route: bool = False,
+    route: bool = True,
     nets: list[str] | None = None,
     grid_step_mm: float = 0.5,
     trace_width_mm: float = 0.3,
@@ -77,12 +80,35 @@ def run_electrical_pipeline(
     refill_zones: bool = False,
     run_drc: bool = False,
     drc_output_path: str | None = None,
+    create_if_missing: bool = True,
+    width_mm: float = 100.0,
+    height_mm: float = 80.0,
 ) -> dict[str, Any]:
-    """Run lock check, netlist application, routing, refill, and optional DRC."""
+    """Run project initialization (if missing), lock check, netlist application, A* autorouting, refill, and DRC."""
     source = Path(pcb_path).expanduser().resolve()
-    if not source.is_file():
-        raise FileNotFoundError(f"PCB file does not exist: {source}")
     phases: list[dict[str, Any]] = []
+    if not source.is_file():
+        if not create_if_missing:
+            raise FileNotFoundError(f"PCB file does not exist: {source}")
+        init_res = _phase(
+            phases,
+            "init_project",
+            lambda: project_generator.create_kicad_project(
+                project_dir=str(source.parent),
+                project_name=source.stem,
+                width_mm=width_mm,
+                height_mm=height_mm,
+                overwrite=False,
+            ),
+        )
+        if init_res.get("status") == "error":
+            return {
+                "status": "error",
+                "phases": phases,
+                "netlist": None,
+                "missing_assignments": [],
+                "inspection_failures": [],
+            }
     netlist_summary: dict[str, Any] | None = None
     missing_assignments: list[dict[str, Any]] = []
     lock_result = _phase(
