@@ -58,11 +58,17 @@ def diagnose() -> dict[str, Any]:
     )
     checks.append(_check("mcp_config", (ROOT / "plugin" / "mcp_config.json").is_file(), "present"))
     checks.append(_check("agent_contract", (ROOT / "AGENTS.md").is_file(), "present"))
+    import pcb_editor
+
+    java_bin, jar_path, kicad_py, fr_reason = pcb_editor._discover_freerouting_env()
+    freerouting_ready = bool(java_bin and jar_path and kicad_py)
     core_ok = all(item["ok"] for item in checks if item["name"] != "kicad_cli")
     return {
         "status": "ok" if (core_ok and kicad_cli_ok) else ("degraded_no_kicad_cli" if core_ok else "blocked"),
         "offline_s_expr_tools_ready": core_ok,
         "kicad_cli_ready": kicad_cli_ok,
+        "freerouting_ready": freerouting_ready,
+        "freerouting_detail": str(jar_path) if freerouting_ready else f"{fr_reason}; using built-in Python A* fallback",
         "checks": checks,
         "kicad_cli_path_env": os.environ.get("KICAD_CLI_PATH"),
     }

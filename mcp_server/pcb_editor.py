@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import heapq
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -1052,6 +1053,110 @@ def _simplify_grid_path(
     return segments, vias
 
 
+def _discover_freerouting_env(
+    freerouting_jar: str | None = None,
+) -> tuple[Path | None, Path | None, Path | None, str | None]:
+    """Locate `java`, `freerouting.jar`, and KiCad's bundled `python` with `pcbnew`."""
+    java_bin = shutil.which("java")
+    if not java_bin:
+        return None, None, None, "java executable not found on PATH"
+
+    jar_candidates: list[Path] = []
+    if freerouting_jar:
+        jar_candidates.append(Path(freerouting_jar).expanduser().resolve())
+    env_jar = os.environ.get("FREEROUTING_JAR")
+    if env_jar:
+        jar_candidates.append(Path(env_jar).expanduser().resolve())
+    jar_candidates.extend(
+        [
+            Path(__file__).resolve().parent / "freerouting.jar",
+            Path.home() / "freerouting.jar",
+            Path(r"C:\Program Files\Freerouting\freerouting.jar"),
+            Path("/usr/local/share/freerouting/freerouting.jar"),
+        ]
+    )
+    jar_path = next((p for p in jar_candidates if p.is_file()), None)
+    if jar_path is None:
+        return Path(java_bin), None, None, "freerouting.jar not found (set FREEROUTING_JAR or pass freerouting_jar)"
+
+    kicad_py: Path | None = None
+    try:
+        from cli_wrapper import discover_kicad_cli
+
+        cli_dir = discover_kicad_cli().parent
+        for name in ("python.exe", "python3", "python"):
+            cand = cli_dir / name
+            if cand.is_file():
+                kicad_py = cand
+                break
+    except Exception:
+        kicad_py = None
+
+    if kicad_py is None:
+        return Path(java_bin), jar_path, None, "KiCad bundled Python (pcbnew) not found for DSN/SES bridge"
+
+    return Path(java_bin), jar_path, kicad_py, None
+
+
+def _run_freerouting(
+    source_pcb: Path,
+    dest_pcb: Path,
+    java_bin: Path,
+    jar_path: Path,
+    kicad_py: Path,
+    timeout_s: int = 120,
+) -> dict[str, Any]:
+    """Export DSN via KiCad `pcbnew`, autoroute via Freerouting CLI, and import SES into `dest_pcb`."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tdir = Path(tmp_dir)
+        staged_pcb = tdir / source_pcb.name
+        staged_pcb.write_text(source_pcb.read_text(encoding="utf-8"), encoding="utf-8")
+        dsn_path = tdir / f"{source_pcb.stem}.dsn"
+        ses_path = tdir / f"{source_pcb.stem}.ses"
+
+        export_script = (
+            "import pcbnew, sys; "
+            "b = pcbnew.LoadBoard(sys.argv[1]); "
+            "ok = pcbnew.ExportSpecctraDSN(b, sys.argv[2]); "
+            "sys.exit(0 if ok else 2)"
+        )
+        res_exp = subprocess.run(
+            [str(kicad_py), "-c", export_script, str(staged_pcb), str(dsn_path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if res_exp.returncode != 0 or not dsn_path.is_file():
+            raise RuntimeError(f"Specctra DSN export failed: {res_exp.stderr or res_exp.stdout}")
+
+        res_fr = subprocess.run(
+            [str(java_bin), "-Djava.awt.headless=true", "-jar", str(jar_path), "-de", str(dsn_path), "-do", str(ses_path), "-mp", "20"],
+            capture_output=True,
+            text=True,
+            timeout=max(30, int(timeout_s)),
+        )
+        if res_fr.returncode != 0 or not ses_path.is_file():
+            raise RuntimeError(f"Freerouting failed: {res_fr.stderr or res_fr.stdout}")
+
+        import_script = (
+            "import pcbnew, sys; "
+            "b = pcbnew.LoadBoard(sys.argv[1]); "
+            "ok = pcbnew.ImportSpecctraSES(b, sys.argv[2]); "
+            "b.Save(sys.argv[3]); "
+            "sys.exit(0 if ok else 3)"
+        )
+        res_imp = subprocess.run(
+            [str(kicad_py), "-c", import_script, str(staged_pcb), str(ses_path), str(dest_pcb)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if res_imp.returncode != 0 or not dest_pcb.is_file():
+            raise RuntimeError(f"Specctra SES import failed: {res_imp.stderr or res_imp.stdout}")
+
+    return {"status": "ok", "saved_path": str(dest_pcb)}
+
+
 def autoroute_pcb_nets(
     pcb_path: str,
     nets: list[str] | None = None,
@@ -1064,26 +1169,49 @@ def autoroute_pcb_nets(
     output_path: str | None = None,
     net_widths: dict[str, float] | None = None,
     auto_neckdown: bool = True,
+    router: str = "auto",
+    freerouting_jar: str | None = None,
+    freerouting_timeout_s: int = 120,
 ) -> dict[str, Any]:
-    """Autoroute unrouted connections on a 2-layer `.kicad_pcb` using obstacle-aware 45-degree/orthogonal A* search.
-
-    Args:
-        pcb_path: Path to the `.kicad_pcb` board file.
-        nets: Optional list of net names to autoroute (defaults to all nets with unrouted pads).
-        grid_step_mm: Routing grid resolution in mm (default `0.5` mm).
-        trace_width_mm: Default trace width in mm (default `0.3` mm).
-        clearance_mm: Minimum copper-to-copper clearance in mm (default `0.25` mm).
-        allow_vias: Whether the router may transition between `F.Cu` and `B.Cu` using vias.
-        via_size_mm: Via pad diameter in mm (default `0.6` mm).
-        via_drill_mm: Via drill diameter in mm (default `0.3` mm).
-        output_path: Optional output `.kicad_pcb` path.
-
-    Returns:
-        Dictionary summarizing routed connections, failed nets, added segments/vias, and `saved_path`.
-    """
+    """Autoroute unrouted connections using Freerouting (when available) with automatic Python A* fallback."""
     source = Path(pcb_path).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(f"PCB file does not exist: {source}")
+
+    router_mode = str(router).strip().lower()
+    fallback_reason: str | None = None
+    router_used = "astar"
+
+    if router_mode in ("auto", "freerouting"):
+        java_bin, jar_path, kicad_py, env_reason = _discover_freerouting_env(freerouting_jar)
+        if java_bin and jar_path and kicad_py:
+            _, dest_pcb, lock_info = _resolve_target_and_output(pcb_path, output_path, suffix="_routed")
+            try:
+                fr_res = _run_freerouting(
+                    source,
+                    dest_pcb,
+                    java_bin,
+                    jar_path,
+                    kicad_py,
+                    timeout_s=freerouting_timeout_s,
+                )
+                return {
+                    "status": "ok" if dest_pcb == source else "ok_staged",
+                    "router_used": "freerouting",
+                    "source_pcb": str(source),
+                    "saved_path": fr_res["saved_path"],
+                    "lock_files": lock_info.get("lock_files", []),
+                }
+            except Exception as exc:
+                if router_mode == "freerouting":
+                    return {"status": "error", "router_used": "freerouting", "error": str(exc)}
+                fallback_reason = str(exc)
+                router_used = "astar_fallback"
+        else:
+            if router_mode == "freerouting":
+                return {"status": "error", "router_used": "freerouting", "error": env_reason}
+            fallback_reason = env_reason
+            router_used = "astar_fallback"
 
     resolved, tree = pcb_inspector._parse_pcb_file(str(source))
     net_map = pcb_inspector._extract_net_map(tree)
@@ -1363,6 +1491,8 @@ def autoroute_pcb_nets(
     )
     return {
         "status": write_res["status"],
+        "router_used": router_used,
+        **({"fallback_reason": fallback_reason} if fallback_reason else {}),
         "source_pcb": str(source),
         "saved_path": write_res["saved_path"],
         "routed_count": len(routed_connections),

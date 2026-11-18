@@ -527,8 +527,11 @@ def autoroute_pcb_nets(
     output_path: str | None = None,
     net_widths: dict[str, float] | None = None,
     auto_neckdown: bool = True,
+    router: str = "auto",
+    freerouting_jar: str | None = None,
+    freerouting_timeout_s: int = 120,
 ) -> dict[str, Any]:
-    """Autoroute unrouted connections on a 2-layer `.kicad_pcb` with per-net widths and pad neck-down."""
+    """Autoroute unrouted connections using Freerouting (when available) with automatic Python A* fallback."""
     return pcb_editor.autoroute_pcb_nets(
         pcb_path=pcb_path,
         nets=nets,
@@ -541,6 +544,9 @@ def autoroute_pcb_nets(
         output_path=output_path,
         net_widths=net_widths,
         auto_neckdown=auto_neckdown,
+        router=router,
+        freerouting_jar=freerouting_jar,
+        freerouting_timeout_s=freerouting_timeout_s,
     )
 
 
