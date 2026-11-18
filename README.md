@@ -1,10 +1,10 @@
-# KiCad Orchestrator — 100% AI-Generated Hardware Design & Verification Suite
+﻿# KiCad Orchestrator — 100% AI-Generated Hardware Design & Verification Suite
 
 ![100% AI-Generated](https://img.shields.io/badge/AI--Generated-100%25-7c3aed?style=for-the-badge)
 ![KiCad 10](https://img.shields.io/badge/KiCad-10.0-314cb0?style=for-the-badge)
 ![MCP Tools](https://img.shields.io/badge/MCP%20Tools-22-059669?style=for-the-badge)
 ![Agent Skills](https://img.shields.io/badge/Agent%20Skills-6-d97706?style=for-the-badge)
-![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)
+![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-blue?style=for-the-badge)
 
 > [!IMPORTANT]
 > **🇺🇦 Повністю згенерований ШІ-інструмент / 🇬🇧 100% AI-Generated Tool**
@@ -201,4 +201,6 @@ pip install -r requirements.txt
 
 ## License
 
-Released under the [MIT License](./LICENSE) — Copyright (c) 2026 `berjer1e`.
+- **mcp_server/ (MCP Engine & Tools):** Licensed under the [GNU AGPLv3](./LICENSE) (commercial licensing available upon request).
+- **plugin/ & dapters/ (Agent Skills & Prompts):** Available under the [MIT License](./plugin/LICENSE).
+- Last full-repository MIT snapshot is tagged as 0.6.0-mit — Copyright (c) 2026 erjer1e.
