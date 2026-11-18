@@ -69,7 +69,8 @@ Coordinate KiCad 10 hardware design from specification or existing project to ve
 - Enforce silkscreen readability (`height >= 1.0 mm`, `thickness >= 0.15 mm`), zero pad overlap, functional designators, and connector polarity/pin labels within `8.0 mm`.
 
 ### Step 4: Layout, Power & Mezzanine Routing (`kicad-tracer`)
-- Instruct `kicad-tracer` to read `<project_dir>/output/state_summary.json` first and route/fix via `edit_pcb_layout`, `edit_pcb_traces`, and `autoroute_pcb_nets`.
+- Instruct `kicad-tracer` to read `<project_dir>/output/state_summary.json` first and route/fix via `edit_pcb_layout`, `edit_pcb_traces`, and `autoroute_pcb_nets` (`router="auto"` uses `freerouting.jar` when present and falls back to built-in Python A* with `net_widths`, `clearance_mm`, and `auto_neckdown`).
+- **Strictly forbidden:** never write ad-hoc custom Python autorouters (`python -` or `scratch/*.py` routing scripts) — always use `autoroute_pcb_nets` or `edit_pcb_traces` with `--args-file`.
 - Verify IPC-2221 trunk widths with pad-entry neck-down (`<= 3.0 mm`), `ΔU = I·R <= 0.1 V`, explicit copper `GND` tracks on all critical components (`C*`, `R*`, `Y*`, `U*` — never zone-only!), crystal length `<= 15 mm`, `100 nF` decoupling `<= 8 mm`, connector mating clearance `>= 2.0 mm`, and mezzanine Z-height + rigid header alignment.
 - Refresh `<project_dir>/output/state_summary.json` after PCB edits.
 

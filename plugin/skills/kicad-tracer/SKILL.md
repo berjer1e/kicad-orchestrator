@@ -14,6 +14,8 @@ Your job is to translate parsed electrical and mechanical requirements (BOM/spec
 
 If `<project_dir>/design_decisions.json` exists, load it first via `manage_design_decisions(project_dir, action="load")` (or inspect it directly) so confirmed copper weight (`1 oz` vs `2 oz`), `display_mounting_mode`, connector orientation/keying, module variants, and silkscreen conventions govern all checks.
 
+**Routing Tool Mandate:** Never write ad-hoc custom Python autorouters (`python -` or `scratch/*.py` routing scripts). Always route through `autoroute_pcb_nets` (which automatically uses `tools/freerouting.jar` / `freerouting.jar` when available and falls back to built-in A* with `net_widths`, `clearance_mm`, and `auto_neckdown`) and `edit_pcb_traces` (via `--args-file` for large payloads).
+
 ## Core Design Checks
 
 1. **IPC-2221 Trace Widths, Pad Neck-Down & Voltage Drop (`ΔU = I·R`):**

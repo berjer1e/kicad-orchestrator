@@ -1069,6 +1069,7 @@ def _discover_freerouting_env(
         jar_candidates.append(Path(env_jar).expanduser().resolve())
     jar_candidates.extend(
         [
+            Path(__file__).resolve().parent / "tools" / "freerouting.jar",
             Path(__file__).resolve().parent / "freerouting.jar",
             Path.home() / "freerouting.jar",
             Path(r"C:\Program Files\Freerouting\freerouting.jar"),
