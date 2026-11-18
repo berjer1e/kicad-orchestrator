@@ -1130,7 +1130,7 @@ def _run_freerouting(
             raise RuntimeError(f"Specctra DSN export failed: {res_exp.stderr or res_exp.stdout}")
 
         res_fr = subprocess.run(
-            [str(java_bin), "-Djava.awt.headless=true", "-jar", str(jar_path), "-de", str(dsn_path), "-do", str(ses_path), "-mp", "20"],
+            [str(java_bin), "-jar", str(jar_path), "-de", str(dsn_path), "-do", str(ses_path), "-mp", "20"],
             capture_output=True,
             text=True,
             timeout=max(30, int(timeout_s)),
