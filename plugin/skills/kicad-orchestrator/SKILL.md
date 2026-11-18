@@ -14,6 +14,10 @@ Coordinate KiCad 10 hardware design from specification or existing project to ve
 
 ## Tooling, Disk Cache & Quota Policy
 
+0. **Single-Board No-Swarm Rule (Strict):**
+   - **NEVER launch a multi-agent Swarm** when designing, routing, or auditing a single KiCad project / single `.kicad_pcb` file — even if the prompt mentions `/teamwork` or parallel workers.
+   - Schematic/netlist setup -> PCB placement/routing -> verification/export are strictly sequential stages on the same `.kicad_pcb` file; parallel workers cannot edit one PCB concurrently and waste quota waiting on locks. Always execute sequentially in a single agent context via `run_electrical_pipeline` / `run_tool.py`.
+
 1. **20 Consolidated Tools (`kicad-orchestrator_kicad_mcp` or `run_tool.py`):**
    - `parse_bom`, `manage_design_decisions`, `list_modules`, `generate_module(module_name, output_dir, kind="both", overrides=None)`
    - `inspect_pcb_layout(pcb_path, compact=True)`, `find_unrouted_pads`, `check_mechanical_fit`, `analyze_pcb_traces`

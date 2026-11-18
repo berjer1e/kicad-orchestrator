@@ -2106,6 +2106,112 @@ def check_mechanical_fit(
         not m["passed"] for m in mezzanine_z_clearance if not m["is_candidate_projection"]
     )
 
+    edge_interface_audit: list[dict[str, Any]] = []
+    if board_bbox is not None:
+        _, all_pads = _parse_footprints_and_pads(tree, net_map)
+        pads_by_ref: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for pad in all_pads:
+            pads_by_ref[pad["reference"]].append(pad)
+
+        edge_iface_pattern = re.compile(
+            r"(?:rj11|rj45|usb|dc-?005|barrel|wh148|potentiometer|pot_|kcd|audio|hdmi|microsd|sd_card)",
+            re.IGNORECASE,
+        )
+        for fp in footprints:
+            ref = fp["reference"]
+            meta_blob = f"{ref} {fp['value']} {fp['library_link']}"
+            is_edge_iface = bool(edge_iface_pattern.search(meta_blob)) or bool(
+                re.match(r"^RV\d+", ref, re.IGNORECASE)
+            )
+            if not is_edge_iface:
+                continue
+
+            box = fp["bbox"]
+            edge_dists = {
+                "left": box["min_x"] - board_bbox["min_x"],
+                "right": board_bbox["max_x"] - box["max_x"],
+                "top": box["min_y"] - board_bbox["min_y"],
+                "bottom": board_bbox["max_y"] - box["max_y"],
+            }
+            nearest_edge, dist_to_edge = min(edge_dists.items(), key=lambda kv: kv[1])
+
+            if nearest_edge == "left":
+                corridor = {
+                    "min_x": board_bbox["min_x"],
+                    "max_x": box["min_x"],
+                    "min_y": box["min_y"],
+                    "max_y": box["max_y"],
+                }
+                outward_vec = (-1.0, 0.0)
+            elif nearest_edge == "right":
+                corridor = {
+                    "min_x": box["max_x"],
+                    "max_x": board_bbox["max_x"],
+                    "min_y": box["min_y"],
+                    "max_y": box["max_y"],
+                }
+                outward_vec = (1.0, 0.0)
+            elif nearest_edge == "top":
+                corridor = {
+                    "min_x": box["min_x"],
+                    "max_x": box["max_x"],
+                    "min_y": board_bbox["min_y"],
+                    "max_y": box["min_y"],
+                }
+                outward_vec = (0.0, -1.0)
+            else:
+                corridor = {
+                    "min_x": box["min_x"],
+                    "max_x": box["max_x"],
+                    "min_y": box["max_y"],
+                    "max_y": board_bbox["max_y"],
+                }
+                outward_vec = (0.0, 1.0)
+
+            blocking_parts: list[str] = []
+            if dist_to_edge > 0.2:
+                for other in footprints:
+                    if other["reference"] == ref or other["layer"] != fp["layer"] or _is_mounting_hole(other):
+                        continue
+                    overlapping, _ = _bbox_clearance(corridor, other["bbox"])
+                    if overlapping:
+                        blocking_parts.append(other["reference"])
+
+            facing_inward = False
+            face_vec_norm: tuple[float, float] | None = None
+            fp_pads = pads_by_ref.get(ref, [])
+            if fp_pads:
+                px_avg = sum(p["x"] for p in fp_pads) / len(fp_pads)
+                py_avg = sum(p["y"] for p in fp_pads) / len(fp_pads)
+                bx_mid = (box["min_x"] + box["max_x"]) * 0.5
+                by_mid = (box["min_y"] + box["max_y"]) * 0.5
+                vx, vy = bx_mid - px_avg, by_mid - py_avg
+                vlen = math.hypot(vx, vy)
+                if vlen >= 0.5:
+                    nx, ny = vx / vlen, vy / vlen
+                    face_vec_norm = (round(nx, 3), round(ny, 3))
+                    dot = nx * outward_vec[0] + ny * outward_vec[1]
+                    if dot < -0.25:
+                        facing_inward = True
+
+            too_far = dist_to_edge > 5.0
+            passed_item = (len(blocking_parts) == 0) and (not facing_inward) and (not too_far)
+            edge_interface_audit.append(
+                {
+                    "reference": ref,
+                    "value": fp["value"],
+                    "nearest_edge": nearest_edge,
+                    "distance_to_edge_mm": round(dist_to_edge, 3),
+                    "too_far_from_board_edge": too_far,
+                    "edge_access_blocked_by": blocking_parts,
+                    "facing_inward": facing_inward,
+                    "face_vector": face_vec_norm,
+                    "passed": passed_item,
+                }
+            )
+
+    edge_interface_failed = any(not item["passed"] for item in edge_interface_audit)
+
     return {
         "status": "ok",
         "pcb_path": layout["pcb_path"],
@@ -2118,6 +2224,7 @@ def check_mechanical_fit(
             and len(unintended_overhangs) == 0
             and not standoff_failed
             and not explicit_mezzanine_failed
+            and not edge_interface_failed
         ),
         "summary": {
             "physical_collision_count": physical_collision_count,
@@ -2136,6 +2243,8 @@ def check_mechanical_fit(
             "mezzanine_modules_with_z_conflicts_count": sum(
                 1 for item in mezzanine_z_clearance if not item["passed"]
             ),
+            "edge_interfaces_checked": len(edge_interface_audit),
+            "edge_interfaces_failed": sum(1 for item in edge_interface_audit if not item["passed"]),
         },
         "courtyard_collisions": courtyard_collisions[:20],
         "board_edge_overhangs": {
@@ -2143,6 +2252,7 @@ def check_mechanical_fit(
             "unintended_overhangs": unintended_overhangs,
         },
         "connector_clearances": [c for c in connector_clearances if not c["passed"]],
+        "edge_interface_orientation_audit": edge_interface_audit,
         "display_and_mounting_audit": {
             "mounting_holes": mounting_holes,
             "display_modules": display_modules,
@@ -2497,6 +2607,53 @@ def analyze_pcb_traces(
     }
 
 
+def _compute_project_signature(
+    resolved_dir: Path,
+    bom_or_pcb_path: str | None,
+) -> dict[str, Any]:
+    """Build a lightweight project signature from the target PCB/BOM name and detected hardware families."""
+    target_pcb: Path | None = None
+    target_bom: Path | None = None
+    if bom_or_pcb_path:
+        cand = Path(bom_or_pcb_path).expanduser().resolve()
+        if cand.is_file():
+            if cand.suffix.lower() == ".kicad_pcb":
+                target_pcb = cand
+            else:
+                target_bom = cand
+    if target_pcb is None and target_bom is None:
+        pcb_candidates = sorted(resolved_dir.glob("*.kicad_pcb"))
+        if pcb_candidates:
+            target_pcb = pcb_candidates[0]
+        else:
+            txt_candidates = sorted(resolved_dir.glob("*.txt"))
+            if txt_candidates:
+                target_bom = txt_candidates[0]
+
+    sig_tokens: set[str] = set()
+    token_pat = re.compile(
+        r"(tp4056|hw-?373|mt3608|mini-?360|mini-?560|wh148|rj11|esp32|atmega|lcd|oled|1602|2004)",
+        re.IGNORECASE,
+    )
+    if target_bom is not None:
+        try:
+            raw = target_bom.read_text(encoding="utf-8", errors="replace")
+            sig_tokens.update(m.group(1).lower().replace("-", "") for m in token_pat.finditer(raw))
+        except OSError:
+            pass
+    if target_pcb is not None:
+        try:
+            raw = target_pcb.read_text(encoding="utf-8", errors="replace")
+            sig_tokens.update(m.group(1).lower().replace("-", "") for m in token_pat.finditer(raw))
+        except OSError:
+            pass
+
+    return {
+        "project_stem": (target_pcb.stem if target_pcb else (target_bom.stem if target_bom else None)),
+        "detected_tokens": sorted(sig_tokens),
+    }
+
+
 def manage_design_decisions(
     project_dir: str,
     action: str = "check",
@@ -2517,6 +2674,7 @@ def manage_design_decisions(
     resolved_dir = Path(project_dir).expanduser().resolve()
     resolved_dir.mkdir(parents=True, exist_ok=True)
     dec_file = resolved_dir / "design_decisions.json"
+    current_sig = _compute_project_signature(resolved_dir, bom_or_pcb_path)
 
     saved_data: dict[str, Any] = {}
     if dec_file.is_file():
@@ -2538,6 +2696,7 @@ def manage_design_decisions(
         merged = dict(saved_data)
         if decisions:
             merged.update(decisions)
+        merged["project_signature"] = current_sig
         merged["updated_at"] = datetime.now(timezone.utc).isoformat()
         dec_file.write_text(json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8")
         return {
@@ -2548,7 +2707,33 @@ def manage_design_decisions(
             "decisions": merged,
         }
 
-    resolved_decisions = dict(saved_data)
+    stale_decisions = False
+    stale_reason: str | None = None
+    saved_sig = saved_data.get("project_signature")
+    if saved_data:
+        if isinstance(saved_sig, dict):
+            prev_stem = saved_sig.get("project_stem")
+            curr_stem = current_sig.get("project_stem")
+            prev_tokens = set(saved_sig.get("detected_tokens", []))
+            curr_tokens = set(current_sig.get("detected_tokens", []))
+            if prev_stem and curr_stem and prev_stem != curr_stem:
+                stale_decisions = True
+                stale_reason = f"Cached decisions belong to '{prev_stem}', but current project is '{curr_stem}'."
+            elif prev_tokens and curr_tokens and prev_tokens != curr_tokens:
+                stale_decisions = True
+                stale_reason = (
+                    f"Detected hardware modules changed ({sorted(prev_tokens)} -> {sorted(curr_tokens)})."
+                )
+        elif current_sig.get("detected_tokens"):
+            saved_blob = json.dumps(saved_data, ensure_ascii=False).lower()
+            curr_tokens = current_sig["detected_tokens"]
+            if not any(tok in saved_blob for tok in curr_tokens):
+                stale_decisions = True
+                stale_reason = (
+                    f"Existing design_decisions.json has no project signature and does not match detected modules {curr_tokens}."
+                )
+
+    resolved_decisions = {} if stale_decisions else dict(saved_data)
     if decisions:
         resolved_decisions.update(decisions)
 
@@ -2712,6 +2897,9 @@ def manage_design_decisions(
         "project_dir": str(resolved_dir),
         "decisions_file": str(dec_file),
         "all_resolved": len(unresolved_questions) == 0,
+        "stale_decisions": stale_decisions,
+        "stale_reason": stale_reason,
+        "project_signature": current_sig,
         "resolved_decisions": resolved_decisions,
         "unresolved_questions": unresolved_questions,
     }

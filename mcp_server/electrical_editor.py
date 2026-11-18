@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ def _resolve_output(
     output_path: str | None,
     suffix: str,
 ) -> tuple[Path, Path]:
+    """Resolve source PCB path and lock-safe destination path."""
     source = Path(pcb_path).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(f"PCB file does not exist: {source}")
@@ -40,6 +42,7 @@ def _resolve_output(
 
 
 def _extract_footprint_blocks(text: str) -> list[tuple[int, int, str]]:
+    """Extract top-level `(footprint ...)` spans from PCB S-expression text."""
     return [
         (start, end, block)
         for start, end, tag, block in pcb_editor._extract_top_level_blocks(text, {"footprint"})
@@ -48,6 +51,7 @@ def _extract_footprint_blocks(text: str) -> list[tuple[int, int, str]]:
 
 
 def _quote_net(name: str) -> str:
+    """Validate and normalize a KiCad net name string."""
     value = str(name).strip()
     if not value:
         raise ValueError("Net names must be non-empty strings.")
@@ -57,6 +61,7 @@ def _quote_net(name: str) -> str:
 
 
 def _existing_net_names(text: str) -> set[str]:
+    """Collect all net names currently declared or referenced in PCB text."""
     return {
         match.group(1)
         for match in re.finditer(r'\(net(?:\s+\d+)?\s+"([^"]*)"\)', text)
@@ -91,8 +96,6 @@ def add_nets_to_pcb(
             f'\n\t(net {next_id + index} "{name}")' for index, name in enumerate(added)
         )
         text = text[:anchor] + declarations + text[anchor:]
-    # Modern KiCad stores net names on pads/tracks.  No synthetic top-level
-    # declaration is inserted because that would make the file invalid.
     destination.write_text(text, encoding="utf-8")
     return {
         "status": "ok" if destination == source else "ok_staged",
@@ -105,28 +108,36 @@ def add_nets_to_pcb(
 
 
 def _replace_or_insert_pad_net(pad_block: str, net_name: str) -> str:
+    """Replace or insert `(net ...)` and ensure a `(uuid ...)` exists on a pad S-expression."""
     quoted = _quote_net(net_name)
     replacement = f'\t\t\t(net "{quoted}")'
     if re.search(r'\(net\s+(?:"[^"]*"|\d+)\)', pad_block):
-        return re.sub(
+        updated = re.sub(
             r'\t+\(net\s+(?:"[^"]*"|\d+)\)',
             replacement,
             pad_block,
             count=1,
         )
-    marker = re.search(r'\n(\s*)\((?:pinfunction|pintype|uuid)\b', pad_block)
-    if marker:
-        return pad_block[: marker.start()] + "\n" + replacement + pad_block[marker.start() :]
-    close = pad_block.rfind(")")
-    return pad_block[:close] + "\n" + replacement + "\n" + pad_block[close:]
+    else:
+        marker = re.search(r'\n(\s*)\((?:pinfunction|pintype|uuid)\b', pad_block)
+        if marker:
+            updated = pad_block[: marker.start()] + "\n" + replacement + pad_block[marker.start() :]
+        else:
+            close = pad_block.rfind(")")
+            updated = pad_block[:close] + "\n" + replacement + "\n" + pad_block[close:]
+    if not re.search(r'\(uuid\s+"[^"]+"\)', updated):
+        close = updated.rfind(")")
+        updated = updated[:close] + f'\n\t\t\t(uuid "{uuid.uuid4()}")\n\t\t' + updated[close:]
+    return updated
 
 
 def assign_pad_nets(
     pcb_path: str,
     assignments: list[dict[str, Any]],
     output_path: str | None = None,
+    strict: bool = True,
 ) -> dict[str, Any]:
-    """Assign net names to footprint pads by reference and pad number."""
+    """Assign net names to footprint pads by reference and pad number, failing on missing pads when strict."""
     source, destination = _resolve_output(pcb_path, output_path, "_pad_nets")
     text = source.read_text(encoding="utf-8")
     by_ref: dict[str, dict[str, str]] = {}
@@ -173,12 +184,16 @@ def assign_pad_nets(
         )
     ]
     destination.write_text(text, encoding="utf-8")
-    return {
-        "status": "ok" if destination == source else "ok_staged",
+    status = "error" if (strict and missing) else ("ok" if destination == source else "ok_staged")
+    result: dict[str, Any] = {
+        "status": status,
         "saved_path": str(destination),
         "assigned": changed,
         "missing_assignments": missing,
     }
+    if strict and missing:
+        result["error"] = f"{len(missing)} pad assignment(s) did not match any footprint/pad on PCB."
+    return result
 
 
 def create_netlist_from_bom(
@@ -266,10 +281,11 @@ def apply_netlist_to_pcb(
             output_path=destination_str,
         )
     return {
-        "status": "ok",
+        "status": "error" if assigned.get("status") == "error" else "ok",
         "saved_path": destination_str,
         "declared": declared,
         "assigned": assigned,
         "gnd_zone": zone_result,
         "missing_assignments": assigned["missing_assignments"],
+        **({"error": assigned["error"]} if assigned.get("error") else {}),
     }

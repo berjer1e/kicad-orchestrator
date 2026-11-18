@@ -13,7 +13,9 @@ subagents.
 
 ## Native mode
 
-When the host exposes subagent/swarm APIs, delegate bounded roles:
+**Single-board rule:** Never spawn a Swarm for a single `.kicad_pcb` project (stages are strictly sequential and share one mutable PCB file). Only use parallel workers when sharded across *multiple independent boards*; for a single board, use the single-agent **Fallback mode** below.
+
+When the host exposes subagent/swarm APIs for multi-board work, delegate bounded roles:
 
 - `searcher`: verify external module dimensions, pinout, variants, and footprint candidates.
 - `generator`: create schematic, symbols, footprints, and the netlist manifest.
