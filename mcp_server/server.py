@@ -382,14 +382,20 @@ def edit_pcb_layout(
     footprint_placements: dict[str, dict[str, Any]] | None = None,
     zones: list[dict[str, Any]] | None = None,
     output_path: str | None = None,
+    replace_footprints: dict[str, str | dict[str, Any]] | None = None,
+    auto_fit_outline: dict[str, Any] | float | None = None,
+    clean_silkscreen: bool | dict[str, Any] = False,
 ) -> dict[str, Any]:
-    """Update board outline (`Edge.Cuts`), footprint coordinates/rotations, and copper zones without `pcbnew`."""
+    """Update board outline (`Edge.Cuts`), footprint placements/replacements, silkscreen, and copper zones."""
     return pcb_editor.edit_pcb_layout(
         pcb_path=pcb_path,
         board_outline=board_outline,
         footprint_placements=footprint_placements,
         zones=zones,
         output_path=output_path,
+        replace_footprints=replace_footprints,
+        auto_fit_outline=auto_fit_outline,
+        clean_silkscreen=clean_silkscreen,
     )
 
 
@@ -519,8 +525,10 @@ def autoroute_pcb_nets(
     via_size_mm: float = 0.6,
     via_drill_mm: float = 0.3,
     output_path: str | None = None,
+    net_widths: dict[str, float] | None = None,
+    auto_neckdown: bool = True,
 ) -> dict[str, Any]:
-    """Autoroute unrouted connections on a 2-layer `.kicad_pcb` using 45-degree/orthogonal A* search."""
+    """Autoroute unrouted connections on a 2-layer `.kicad_pcb` with per-net widths and pad neck-down."""
     return pcb_editor.autoroute_pcb_nets(
         pcb_path=pcb_path,
         nets=nets,
@@ -531,6 +539,8 @@ def autoroute_pcb_nets(
         via_size_mm=via_size_mm,
         via_drill_mm=via_drill_mm,
         output_path=output_path,
+        net_widths=net_widths,
+        auto_neckdown=auto_neckdown,
     )
 
 

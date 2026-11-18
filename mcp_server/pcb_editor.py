@@ -426,31 +426,196 @@ def _insert_before_board_end(text: str, new_blocks: list[str]) -> str:
     return text[:end_idx] + "\n".join(new_blocks) + "\n)\n"
 
 
+def _replace_footprint_preserving_nets(
+    old_block: str,
+    spec: str | dict[str, Any],
+) -> str:
+    """Swap a footprint block with a `.kicad_mod` template while keeping Reference, Value, position, and pad nets."""
+    fp_path_str = spec if isinstance(spec, str) else str(spec.get("fp_path", ""))
+    fp_path = Path(fp_path_str).expanduser().resolve()
+    if not fp_path.is_file():
+        raise FileNotFoundError(f"Replacement footprint file not found: {fp_path}")
+
+    raw = fp_path.read_text(encoding="utf-8")
+    new_blocks = _extract_top_level_blocks(f"(library\n{raw}\n)\n", {"footprint"})
+    if not new_blocks:
+        raise ValueError(f"No (footprint ...) block found in {fp_path}")
+    new_block = new_blocks[0][3]
+
+    m_ref = re.search(r'\(property\s+"Reference"\s+"([^"]+)"', old_block)
+    m_val = re.search(r'\(property\s+"Value"\s+"([^"]+)"', old_block)
+    m_at = re.search(r"\(at\s+([-\d.]+)\s+([-\d.]+)(?:\s+([-\d.]+))?\)", old_block)
+
+    ref = m_ref.group(1) if m_ref else "REF?"
+    val = m_val.group(1) if m_val else ""
+    old_x = float(m_at.group(1)) if m_at else 0.0
+    old_y = float(m_at.group(2)) if m_at else 0.0
+    old_rot = float(m_at.group(3)) if (m_at and m_at.group(3)) else 0.0
+
+    if isinstance(spec, dict):
+        x = float(spec.get("x", old_x))
+        y = float(spec.get("y", old_y))
+        rot = float(spec.get("rotation", old_rot))
+    else:
+        x, y, rot = old_x, old_y, old_rot
+
+    old_pad_nets: dict[str, str] = {}
+    for _ps, _pe, _pt, pblk in _extract_top_level_blocks(old_block, {"pad"}):
+        pm = re.match(r'\(pad\s+"([^"]+)"', pblk)
+        nm = re.search(r'\(net\s+(?:"([^"]+)"|(\d+))\)', pblk)
+        if pm and nm:
+            old_pad_nets[pm.group(1)] = nm.group(1) or nm.group(2)
+
+    at_str = f"\t\t(at {x:g} {y:g}" + (f" {rot:g}" if rot else "") + ")"
+    if re.search(r"\n\s*\(at\s+[^\)]+\)", new_block):
+        new_block = re.sub(r"\n\s*\(at\s+[^\)]+\)", "\n" + at_str, new_block, count=1)
+    else:
+        new_block = new_block.replace("\n", f"\n{at_str}\n", 1)
+
+    new_block = re.sub(
+        r'(\(property\s+"Reference"\s+)"[^"]+"',
+        rf'\1"{ref}"',
+        new_block,
+        count=1,
+    )
+    if val:
+        new_block = re.sub(
+            r'(\(property\s+"Value"\s+)"[^"]+"',
+            rf'\1"{val}"',
+            new_block,
+            count=1,
+        )
+
+    pad_spans = _extract_top_level_blocks(new_block, {"pad"})
+    for pstart, pend, _ptag, pblk in reversed(pad_spans):
+        pm = re.match(r'\(pad\s+"([^"]+)"', pblk)
+        if not pm:
+            continue
+        pnum = pm.group(1)
+        net_val = old_pad_nets.get(pnum)
+        updated_pad = pblk
+        if net_val:
+            net_line = f'\t\t\t(net "{net_val}")'
+            if re.search(r'\(net\s+(?:"[^"]*"|\d+)\)', updated_pad):
+                updated_pad = re.sub(r'\t+\(net\s+(?:"[^"]*"|\d+)\)', net_line, updated_pad, count=1)
+            else:
+                close_p = updated_pad.rfind(")")
+                updated_pad = updated_pad[:close_p] + "\n" + net_line + "\n\t\t" + updated_pad[close_p:]
+        if not re.search(r'\(uuid\s+"[^"]+"\)', updated_pad):
+            close_p = updated_pad.rfind(")")
+            updated_pad = updated_pad[:close_p] + f'\n\t\t\t(uuid "{uuid.uuid4()}")\n\t\t' + updated_pad[close_p:]
+        new_block = new_block[:pstart] + updated_pad + new_block[pend:]
+
+    return "\t" + new_block.strip()
+
+
+def _clean_footprint_silkscreen(
+    block: str,
+    hide_value: bool = False,
+) -> tuple[str, int]:
+    """Reposition overlapping Reference/Value silkscreen labels clear of pads and normalize font sizes."""
+    m_fp_at = re.search(r"\n\s*\(at\s+([-\d.]+)\s+([-\d.]+)(?:\s+([-\d.]+))?\)", block)
+    fp_rot = float(m_fp_at.group(3)) if (m_fp_at and m_fp_at.group(3)) else 0.0
+
+    pad_rects: list[tuple[float, float, float, float]] = []
+    for _ps, _pe, _pt, pblk in _extract_top_level_blocks(block, {"pad"}):
+        pat = re.search(r"\(at\s+([-\d.]+)\s+([-\d.]+)", pblk)
+        psz = re.search(r"\(size\s+([-\d.]+)\s+([-\d.]+)\)", pblk)
+        if pat:
+            px, py = float(pat.group(1)), float(pat.group(2))
+            sx = float(psz.group(1)) * 0.5 if psz else 0.8
+            sy = float(psz.group(2)) * 0.5 if psz else 0.8
+            pad_rects.append((px - sx - 0.8, py - sy - 0.8, px + sx + 0.8, py + sy + 0.8))
+
+    if not pad_rects:
+        return block, 0
+
+    min_py = min(r[1] for r in pad_rects)
+    max_py = max(r[3] for r in pad_rects)
+    mid_px = (min(r[0] for r in pad_rects) + max(r[2] for r in pad_rects)) * 0.5
+
+    def _hits_pad(lx: float, ly: float) -> bool:
+        """Check whether local silkscreen text center lies inside any expanded pad box."""
+        return any(x0 <= lx <= x1 and y0 <= ly <= y1 for x0, y0, x1, y1 in pad_rects)
+
+    adjusted = 0
+    prop_spans = _extract_top_level_blocks(block, {"property"})
+    for start_idx, end_idx, _tag, pblk in reversed(prop_spans):
+        pm = re.match(r'\(property\s+"(Reference|Value)"', pblk)
+        if not pm:
+            continue
+        pname = pm.group(1)
+        new_pblk = pblk
+        if pname == "Value" and hide_value and "(hide yes)" not in new_pblk:
+            close_i = new_pblk.rfind(")")
+            new_pblk = new_pblk[:close_i] + " (hide yes)" + new_pblk[close_i:]
+            adjusted += 1
+
+        m_pat = re.search(r"\(at\s+([-\d.]+)\s+([-\d.]+)(?:\s+([-\d.]+))?\)", new_pblk)
+        if m_pat:
+            lx, ly = float(m_pat.group(1)), float(m_pat.group(2))
+            if _hits_pad(lx, ly):
+                cand_y = round(min_py - 1.2, 2) if pname == "Reference" else round(max_py + 1.2, 2)
+                if _hits_pad(mid_px, cand_y):
+                    cand_y = round(max_py + 2.4, 2)
+                rot_str = f" {fp_rot:g}" if fp_rot else ""
+                new_pblk = re.sub(
+                    r"\(at\s+[^\)]+\)",
+                    f"(at {mid_px:g} {cand_y:g}{rot_str})",
+                    new_pblk,
+                    count=1,
+                )
+                adjusted += 1
+
+        new_pblk = re.sub(
+            r"\(size\s+([-\d.]+)\s+([-\d.]+)\)",
+            lambda m: f"(size {max(1.0, float(m.group(1))):g} {max(1.0, float(m.group(2))):g})",
+            new_pblk,
+            count=1,
+        )
+        new_pblk = re.sub(
+            r"\(thickness\s+([-\d.]+)\)",
+            lambda m: f"(thickness {max(0.15, float(m.group(1))):g})",
+            new_pblk,
+            count=1,
+        )
+        if new_pblk != pblk:
+            block = block[:start_idx] + new_pblk + block[end_idx:]
+
+    return block, adjusted
+
+
 def edit_pcb_layout(
     pcb_path: str,
     board_outline: dict[str, Any] | None = None,
     footprint_placements: dict[str, dict[str, Any]] | None = None,
     zones: list[dict[str, Any]] | None = None,
     output_path: str | None = None,
+    replace_footprints: dict[str, str | dict[str, Any]] | None = None,
+    auto_fit_outline: dict[str, Any] | float | None = None,
+    clean_silkscreen: bool | dict[str, Any] = False,
 ) -> dict[str, Any]:
-    """Safely update board outline (`Edge.Cuts`), footprint coordinates/rotations, and copper zones on a `.kicad_pcb`.
-
-    Args:
-        pcb_path: Path to the source `.kicad_pcb` file.
-        board_outline: Optional dictionary `{"x": float, "y": float, "width": float, "height": float, "corner_radius_mm": float, "clear_existing": bool}` for `Edge.Cuts`.
-        footprint_placements: Optional mapping of reference designators to `{"x": float, "y": float, "rotation": float, "ref_at": [x, y, rot]}`.
-        zones: Optional list of zone definitions `[{"net": "GND", "layer": "B.Cu", "x": float, "y": float, "width": float, "height": float, "clearance_mm": 0.3, "replace_existing": True}]`.
-        output_path: Optional output `.kicad_pcb` path (automatically stages to `<stem>_edited.kicad_pcb` if locked and `output_path` is None).
-
-    Returns:
-        Dictionary summarizing updated footprints, outline items, zones, `saved_path`, and lock status.
-    """
+    """Safely update board outline (`Edge.Cuts`), footprint placements/replacements, silkscreen, and copper zones."""
     source, dest, lock_info = _resolve_target_and_output(pcb_path, output_path, suffix="_layout")
     text = source.read_text(encoding="utf-8")
     name_to_id, id_to_name, uses_int_ids = _parse_net_map(text)
 
     placements = footprint_placements or {}
-    clear_edges = bool(board_outline and board_outline.get("clear_existing", True))
+    replacements = replace_footprints or {}
+    fit_cfg: dict[str, Any] | None = None
+    if auto_fit_outline is not None:
+        fit_cfg = (
+            {"margin_mm": float(auto_fit_outline)}
+            if isinstance(auto_fit_outline, (int, float))
+            else dict(auto_fit_outline)
+        )
+    silk_cfg = clean_silkscreen if isinstance(clean_silkscreen, dict) else {}
+    do_clean_silk = bool(clean_silkscreen)
+
+    clear_edges = bool(
+        (board_outline and board_outline.get("clear_existing", True))
+        or (fit_cfg and fit_cfg.get("clear_existing", True))
+    )
     replace_zone_keys: set[tuple[str, str]] = set()
     if zones:
         for zspec in zones:
@@ -465,18 +630,31 @@ def edit_pcb_layout(
     kept_parts: list[str] = []
     last_pos = 0
     moved_refs: list[str] = []
+    replaced_refs: list[str] = []
+    cleaned_silk_count = 0
     removed_edge_items = 0
     removed_zones = 0
 
     for start_idx, end_idx, tag, blk in blocks:
-        if tag == "footprint" and placements:
+        if tag == "footprint" and (placements or replacements or do_clean_silk):
             m_ref = re.search(r'\(property\s+"Reference"\s+"([^"]+)"', blk)
             ref = m_ref.group(1) if m_ref else None
-            if ref and ref in placements:
+            if ref and (ref in replacements or ref in placements or do_clean_silk):
+                new_blk = blk
+                if ref in replacements:
+                    new_blk = _replace_footprint_preserving_nets(new_blk, replacements[ref])
+                    replaced_refs.append(ref)
+                if ref in placements:
+                    new_blk = _update_footprint_block(new_blk, placements[ref])
+                    moved_refs.append(ref)
+                if do_clean_silk:
+                    new_blk, adj = _clean_footprint_silkscreen(
+                        new_blk, hide_value=bool(silk_cfg.get("hide_value", False))
+                    )
+                    cleaned_silk_count += adj
                 kept_parts.append(text[last_pos:start_idx])
-                kept_parts.append(_update_footprint_block(blk, placements[ref]))
+                kept_parts.append(new_blk)
                 last_pos = end_idx
-                moved_refs.append(ref)
                 continue
         elif tag in {"gr_rect", "gr_line", "gr_arc", "gr_poly"} and clear_edges:
             if '(layer "Edge.Cuts")' in blk:
@@ -506,9 +684,29 @@ def edit_pcb_layout(
     kept_parts.append(text[last_pos:])
     updated_text = "".join(kept_parts)
 
+    effective_outline = dict(board_outline) if board_outline else None
+    if fit_cfg is not None:
+        margin = float(fit_cfg.get("margin_mm", 3.0))
+        tree = pcb_inspector._parse_sexpr(updated_text)
+        net_map_tmp = pcb_inspector._extract_net_map(tree)
+        fps, _ = pcb_inspector._parse_footprints_and_pads(tree, net_map_tmp)
+        if fps:
+            bx0 = min(fp["bbox"]["min_x"] for fp in fps) - margin
+            by0 = min(fp["bbox"]["min_y"] for fp in fps) - margin
+            bx1 = max(fp["bbox"]["max_x"] for fp in fps) + margin
+            by1 = max(fp["bbox"]["max_y"] for fp in fps) + margin
+            effective_outline = {
+                "x": round(bx0, 3),
+                "y": round(by0, 3),
+                "width": round(bx1 - bx0, 3),
+                "height": round(by1 - by0, 3),
+                "corner_radius_mm": float(fit_cfg.get("corner_radius_mm", 0.0)),
+                "clear_existing": bool(fit_cfg.get("clear_existing", True)),
+            }
+
     appended_blocks: list[str] = []
-    if board_outline:
-        appended_blocks.extend(_format_edge_cuts(board_outline))
+    if effective_outline:
+        appended_blocks.extend(_format_edge_cuts(effective_outline))
 
     added_zones = 0
     if zones:
@@ -527,9 +725,12 @@ def edit_pcb_layout(
         "saved_path": str(dest),
         "modified_in_place": dest == source,
         "moved_footprints": sorted(moved_refs),
+        "replaced_footprints": sorted(replaced_refs),
+        "cleaned_silkscreen_items": cleaned_silk_count,
+        "fitted_outline": effective_outline,
         "missing_footprints": sorted(set(placements) - set(moved_refs)),
         "removed_edge_items": removed_edge_items,
-        "added_edge_items": len(_format_edge_cuts(board_outline)) if board_outline else 0,
+        "added_edge_items": len(_format_edge_cuts(effective_outline)) if effective_outline else 0,
         "removed_zones": removed_zones,
         "added_zones": added_zones,
         "lock_files": lock_info.get("lock_files", []),
@@ -861,6 +1062,8 @@ def autoroute_pcb_nets(
     via_size_mm: float = 0.6,
     via_drill_mm: float = 0.3,
     output_path: str | None = None,
+    net_widths: dict[str, float] | None = None,
+    auto_neckdown: bool = True,
 ) -> dict[str, Any]:
     """Autoroute unrouted connections on a 2-layer `.kicad_pcb` using obstacle-aware 45-degree/orthogonal A* search.
 
@@ -1095,18 +1298,26 @@ def autoroute_pcb_nets(
             for pli, pgx, pgy in grid_path:
                 blocked[pli].setdefault((pgx, pgy), set()).add(net_name)
 
+            net_trace_w = float((net_widths or {}).get(net_name, trace_width_mm))
             segs, vias = _simplify_grid_path(
                 grid_path,
                 gx_to_x,
                 gy_to_y,
                 net_name,
-                trace_width_mm,
+                net_trace_w,
                 via_size_mm,
                 via_drill_mm,
             )
             if segs:
                 segs[0]["start"] = [round(float(src_pad["x"]), 4), round(float(src_pad["y"]), 4)]
                 segs[-1]["end"] = [round(float(dst_pad["x"]), 4), round(float(dst_pad["y"]), 4)]
+                if auto_neckdown:
+                    src_pad_w = min(float(src_pad.get("size_x", net_trace_w)), float(src_pad.get("size_y", net_trace_w)))
+                    dst_pad_w = min(float(dst_pad.get("size_x", net_trace_w)), float(dst_pad.get("size_y", net_trace_w)))
+                    if net_trace_w > src_pad_w * 0.9:
+                        segs[0]["width"] = round(max(0.2, min(net_trace_w, src_pad_w * 0.85)), 3)
+                    if net_trace_w > dst_pad_w * 0.9:
+                        segs[-1]["width"] = round(max(0.2, min(net_trace_w, dst_pad_w * 0.85)), 3)
             all_new_segments.extend(segs)
             all_new_vias.extend(vias)
             routed_connections.append(
