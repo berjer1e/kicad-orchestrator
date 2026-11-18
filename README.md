@@ -2,8 +2,8 @@
 
 ![100% AI-Generated](https://img.shields.io/badge/AI--Generated-100%25-7c3aed?style=for-the-badge)
 ![KiCad 10](https://img.shields.io/badge/KiCad-10.0-314cb0?style=for-the-badge)
-![MCP Tools](https://img.shields.io/badge/MCP%20Tools-14-059669?style=for-the-badge)
-![Agent Skills](https://img.shields.io/badge/Agent%20Skills-5-d97706?style=for-the-badge)
+![MCP Tools](https://img.shields.io/badge/MCP%20Tools-22-059669?style=for-the-badge)
+![Agent Skills](https://img.shields.io/badge/Agent%20Skills-6-d97706?style=for-the-badge)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)
 
 > [!IMPORTANT]
