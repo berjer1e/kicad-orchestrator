@@ -184,6 +184,8 @@ def run_validations(
     schematic_parity: bool = True,
     refill_zones: bool = True,
     save_board: bool = False,
+    compact: bool = True,
+    errors_only: bool = False,
 ) -> dict[str, Any]:
     """Run KiCad DRC, ERC, footprint/symbol SVG validation, lock check, or CLI version lookup."""
     cli = _get_cli()
@@ -195,9 +197,16 @@ def run_validations(
             schematic_parity=schematic_parity,
             refill_zones=refill_zones,
             save_board=save_board,
+            compact=compact,
+            errors_only=errors_only,
         )
     if kind == "erc":
-        return cli.run_erc(sch_path=target_path, output_path=output_path)
+        return cli.run_erc(
+            sch_path=target_path,
+            output_path=output_path,
+            compact=compact,
+            errors_only=errors_only,
+        )
     if kind == "footprint":
         return cli.validate_footprint(fp_path=target_path, output_dir=output_path)
     if kind == "symbol":

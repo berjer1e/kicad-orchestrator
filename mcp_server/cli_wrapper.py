@@ -761,6 +761,23 @@ class KiCadCLI:
             data = json.loads(report_file.read_text(encoding="utf-8"))
             return data, str(report_file) if output_path is not None else None
 
+    @staticmethod
+    def _filter_violations(
+        items: list[dict[str, Any]],
+        *,
+        compact: bool,
+        errors_only: bool,
+    ) -> list[dict[str, Any]]:
+        """Bound DRC/ERC violation lists by severity so warnings do not flood agent context."""
+        if errors_only:
+            filtered = [item for item in items if str(item.get("severity", "")).lower() == "error"]
+            return filtered[:25] if compact else filtered
+        if not compact:
+            return items
+        errors = [item for item in items if str(item.get("severity", "")).lower() == "error"]
+        others = [item for item in items if str(item.get("severity", "")).lower() != "error"]
+        return errors[:25] + others[:5]
+
     def run_drc(
         self,
         pcb_path: str,
@@ -768,6 +785,8 @@ class KiCadCLI:
         schematic_parity: bool = True,
         refill_zones: bool = True,
         save_board: bool = False,
+        compact: bool = True,
+        errors_only: bool = False,
     ) -> dict[str, Any]:
         """Run Design Rules Check (`pcb drc --format json`) and summarize violations.
 
@@ -811,8 +830,13 @@ class KiCadCLI:
         violations = report.get("violations", [])
         unconnected = report.get("unconnected_items", [])
         parity = report.get("schematic_parity", [])
+        out_violations = self._filter_violations(violations, compact=compact, errors_only=errors_only)
+        out_parity = self._filter_violations(parity, compact=compact, errors_only=errors_only)
+        out_unconnected = unconnected[:25] if compact else unconnected
         result: dict[str, Any] = {
             "status": "ok",
+            "compact": compact,
+            "errors_only": errors_only,
             "passed": not violations and not unconnected and not parity,
             "kicad_version": report.get("kicad_version", ""),
             "source": report.get("source", str(board)),
@@ -824,21 +848,29 @@ class KiCadCLI:
             "unconnected_count": len(unconnected),
             "schematic_parity_count": len(parity),
             "severity_counts": _count_severities(violations),
-            "violations": violations,
-            "unconnected_items": unconnected,
-            "schematic_parity": parity,
+            "violations": out_violations,
+            "unconnected_items": out_unconnected,
+            "schematic_parity": out_parity,
             "report_path": saved_path,
         }
         if board_save_skipped_reason is not None:
             result["board_save_skipped_reason"] = board_save_skipped_reason
         return _attach_lock_info(result, board, lock_info=lock_info)
 
-    def run_erc(self, sch_path: str, output_path: str | None = None) -> dict[str, Any]:
+    def run_erc(
+        self,
+        sch_path: str,
+        output_path: str | None = None,
+        compact: bool = True,
+        errors_only: bool = False,
+    ) -> dict[str, Any]:
         """Run Electrical Rules Check (`sch erc --format json`) and summarize violations.
 
         Args:
             sch_path: Path to the `.kicad_sch` schematic file.
             output_path: Optional path to persist the raw KiCad JSON ERC report.
+            compact: When True (default), cap warning items to keep responses bounded.
+            errors_only: When True, include only `severity == "error"` items in `violations`.
 
         Returns:
             Dictionary summarizing ERC pass status, sheet violations, and KiCad lock info.
@@ -852,8 +884,11 @@ class KiCadCLI:
             for item in sheet.get("violations", []):
                 violations.append({"sheet": sheet_path, **item})
 
-        result = {
+        out_violations = self._filter_violations(violations, compact=compact, errors_only=errors_only)
+        result: dict[str, Any] = {
             "status": "ok",
+            "compact": compact,
+            "errors_only": errors_only,
             "passed": len(violations) == 0,
             "kicad_version": report.get("kicad_version", ""),
             "source": report.get("source", str(schematic)),
@@ -861,10 +896,11 @@ class KiCadCLI:
             "sheet_count": len(sheets),
             "violation_count": len(violations),
             "severity_counts": _count_severities(violations),
-            "violations": violations,
-            "sheets": sheets,
+            "violations": out_violations,
             "report_path": saved_path,
         }
+        if not compact:
+            result["sheets"] = sheets
         return _attach_lock_info(result, schematic)
 
     def _run_svg_validation(
