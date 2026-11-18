@@ -8,6 +8,7 @@ this module owns UUIDs, symbol syntax, pin geometry, labels, and instances.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -167,8 +168,9 @@ def create_schematic(
     components: list[dict[str, Any]],
     nets: list[dict[str, Any]],
     title: str = "",
+    append: bool = False,
 ) -> dict[str, Any]:
-    """Create a KiCad 10 schematic from structured components and net connections."""
+    """Create a KiCad 10 schematic or append new components/nets to an existing `.kicad_sch`."""
     if not project_name.strip():
         raise ValueError("project_name must be non-empty.")
     if not components:
@@ -257,6 +259,63 @@ def create_schematic(
     lines.extend(["\t(sheet_instances", '\t\t(path "/"', '\t\t\t(page "1")', "\t\t)", "\t)", "\t(embedded_fonts no)", ")"])
     destination = Path(output_path).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if append and destination.is_file():
+        existing = destination.read_text(encoding="utf-8")
+        m_root_uid = re.search(r'^\s*\(uuid\s+"([^"]+)"\)', existing, re.MULTILINE)
+        existing_proj_uuid = m_root_uid.group(1) if m_root_uid else _uid()
+
+        new_defs = [
+            defn
+            for lib_id, defn in definitions.items()
+            if f'(symbol\n\t\t\t(lib_id "{lib_id}")' not in existing and f'(symbol "{lib_id}"' not in existing
+        ]
+        new_insts = [
+            _instance(
+                existing_proj_uuid,
+                project_name,
+                component,
+                lib_ids[str(component["reference"])],
+                pin_uuids[str(component["reference"])],
+            )
+            for component in components
+        ]
+        new_wires: list[str] = []
+        for net in nets:
+            name = str(net["name"])
+            for connection in net.get("connections", []):
+                key = (str(connection["reference"]), str(connection["pad"]))
+                if key not in positions:
+                    continue
+                px, py = positions[key]
+                new_wires.append(
+                    f'\t(wire\n\t\t(pts\n\t\t\t(xy {_fmt(px)} {_fmt(py)}) (xy {_fmt(px + 5.08)} {_fmt(py)})\n'
+                    '\t\t)\n\t\t(stroke (width 0) (type default))\n'
+                    f'\t\t(uuid "{_uid()}")\n\t)'
+                )
+                new_wires.append(_label(name, px + 5.08, py))
+
+        updated = existing
+        if new_defs:
+            lib_close = re.search(r"\n\t\)\s*\n\t\((?:symbol|wire|label|sheet_instances)\b", updated)
+            if lib_close:
+                updated = updated[: lib_close.start()] + "\n" + "\n".join(new_defs) + updated[lib_close.start() :]
+        insert_pos = updated.rfind("\t(sheet_instances")
+        if insert_pos == -1:
+            insert_pos = updated.rfind(")")
+        body_add = "\n".join(new_insts + new_wires)
+        if body_add:
+            updated = updated[:insert_pos] + body_add + "\n" + updated[insert_pos:]
+        destination.write_text(updated, encoding="utf-8")
+        return {
+            "status": "ok",
+            "mode": "append",
+            "output_path": str(destination),
+            "project_name": project_name,
+            "component_count": len(components),
+            "net_count": len(nets),
+            "connection_count": sum(len(net.get("connections", [])) for net in nets),
+        }
+
     destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return {
         "status": "ok",

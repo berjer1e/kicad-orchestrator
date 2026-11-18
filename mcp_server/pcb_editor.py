@@ -444,9 +444,15 @@ def _replace_footprint_preserving_nets(
         raise ValueError(f"No (footprint ...) block found in {fp_path}")
     new_block = new_blocks[0][3]
 
-    m_ref = re.search(r'\(property\s+"Reference"\s+"([^"]+)"', old_block)
-    m_val = re.search(r'\(property\s+"Value"\s+"([^"]+)"', old_block)
-    m_at = re.search(r"\(at\s+([-\d.]+)\s+([-\d.]+)(?:\s+([-\d.]+))?\)", old_block)
+    m_ref = re.search(r'\(property\s+"Reference"\s+"([^"]+)"', old_block) or re.search(
+        r'\(fp_text\s+reference\s+"([^"]+)"', old_block
+    )
+    m_val = re.search(r'\(property\s+"Value"\s+"([^"]+)"', old_block) or re.search(
+        r'\(fp_text\s+value\s+"([^"]+)"', old_block
+    )
+    header_end = re.search(r"\((?:property|fp_text|fp_line|fp_rect|fp_circle|pad|model)\b", old_block)
+    old_hdr = old_block[: header_end.start()] if header_end else old_block
+    m_at = re.search(r"\(at\s+([-\d.]+)\s+([-\d.]+)(?:\s+([-\d.]+))?\)", old_hdr)
 
     ref = m_ref.group(1) if m_ref else "REF?"
     val = m_val.group(1) if m_val else ""
@@ -464,25 +470,47 @@ def _replace_footprint_preserving_nets(
     old_pad_nets: dict[str, str] = {}
     for _ps, _pe, _pt, pblk in _extract_top_level_blocks(old_block, {"pad"}):
         pm = re.match(r'\(pad\s+"([^"]+)"', pblk)
-        nm = re.search(r'\(net\s+(?:"([^"]+)"|(\d+))\)', pblk)
+        nm = re.search(r'\(net\s+(?:\d+\s+"([^"]*)"|"([^"]+)"|(\d+))\)', pblk)
         if pm and nm:
-            old_pad_nets[pm.group(1)] = nm.group(1) or nm.group(2)
+            net_tok = nm.group(1) or nm.group(2) or nm.group(3)
+            if net_tok:
+                old_pad_nets[pm.group(1)] = net_tok
 
     at_str = f"\t\t(at {x:g} {y:g}" + (f" {rot:g}" if rot else "") + ")"
-    if re.search(r"\n\s*\(at\s+[^\)]+\)", new_block):
-        new_block = re.sub(r"\n\s*\(at\s+[^\)]+\)", "\n" + at_str, new_block, count=1)
+    new_hdr_end = re.search(r"\((?:property|fp_text|fp_line|fp_rect|fp_circle|pad|model)\b", new_block)
+    split_pos = new_hdr_end.start() if new_hdr_end else len(new_block)
+    new_hdr, new_body = new_block[:split_pos], new_block[split_pos:]
+    if re.search(r"\(at\s+[^\)]+\)", new_hdr):
+        new_hdr = re.sub(r"[ \t]*\(at\s+[^\)]+\)", at_str, new_hdr, count=1)
     else:
-        new_block = new_block.replace("\n", f"\n{at_str}\n", 1)
+        m_layer = re.search(r'(\(layer\s+"[^"]+"\))', new_hdr)
+        if m_layer:
+            new_hdr = new_hdr[: m_layer.end()] + "\n" + at_str + new_hdr[m_layer.end() :]
+        else:
+            new_hdr = new_hdr.replace("\n", f"\n{at_str}\n", 1)
+    new_block = new_hdr + new_body
 
     new_block = re.sub(
-        r'(\(property\s+"Reference"\s+)"[^"]+"',
+        r'(\(property\s+"Reference"\s+)"[^"]*"',
+        rf'\1"{ref}"',
+        new_block,
+        count=1,
+    )
+    new_block = re.sub(
+        r'(\(fp_text\s+reference\s+)"[^"]*"',
         rf'\1"{ref}"',
         new_block,
         count=1,
     )
     if val:
         new_block = re.sub(
-            r'(\(property\s+"Value"\s+)"[^"]+"',
+            r'(\(property\s+"Value"\s+)"[^"]*"',
+            rf'\1"{val}"',
+            new_block,
+            count=1,
+        )
+        new_block = re.sub(
+            r'(\(fp_text\s+value\s+)"[^"]*"',
             rf'\1"{val}"',
             new_block,
             count=1,
@@ -495,17 +523,14 @@ def _replace_footprint_preserving_nets(
             continue
         pnum = pm.group(1)
         net_val = old_pad_nets.get(pnum)
-        updated_pad = pblk
+        updated_pad = re.sub(r'\n?[ \t]*\(net\s+(?:\d+\s+"[^"]*"|"[^"]*"|\d+)\)', "", pblk)
         if net_val:
             net_line = f'\t\t\t(net "{net_val}")'
-            if re.search(r'\(net\s+(?:"[^"]*"|\d+)\)', updated_pad):
-                updated_pad = re.sub(r'\t+\(net\s+(?:"[^"]*"|\d+)\)', net_line, updated_pad, count=1)
-            else:
-                close_p = updated_pad.rfind(")")
-                updated_pad = updated_pad[:close_p] + "\n" + net_line + "\n\t\t" + updated_pad[close_p:]
+            close_p = updated_pad.rfind(")")
+            updated_pad = updated_pad[:close_p].rstrip() + "\n" + net_line + "\n\t\t" + updated_pad[close_p:]
         if not re.search(r'\(uuid\s+"[^"]+"\)', updated_pad):
             close_p = updated_pad.rfind(")")
-            updated_pad = updated_pad[:close_p] + f'\n\t\t\t(uuid "{uuid.uuid4()}")\n\t\t' + updated_pad[close_p:]
+            updated_pad = updated_pad[:close_p].rstrip() + f'\n\t\t\t(uuid "{uuid.uuid4()}")\n\t\t' + updated_pad[close_p:]
         new_block = new_block[:pstart] + updated_pad + new_block[pend:]
 
     return "\t" + new_block.strip()
@@ -1477,24 +1502,22 @@ def autoroute_pcb_nets(
 
             net_trace_w = float((net_widths or {}).get(net_name, trace_width_mm))
             extra_cells = int(math.ceil(max(0.0, (net_trace_w - trace_width_mm) * 0.5) / step))
-            start_clear_r = max(2, extra_cells + 1)
+            via_r_cells = int(
+                math.ceil(max(0.0, (via_size_mm * 0.5 + clearance_mm - trace_width_mm * 0.5)) / step)
+            )
 
-            def _cell_blocked(layer_idx: int, cx: int, cy: int) -> bool:
-                """Check whether routing a trace of width `net_trace_w` at `(cx, cy)` violates clearance."""
-                if extra_cells == 0:
+            def _cell_blocked(layer_idx: int, cx: int, cy: int, radius: int = extra_cells) -> bool:
+                """Check whether routing at `(cx, cy)` with `radius` clearance hits another net."""
+                if radius <= 0:
                     occ = blocked[layer_idx].get((cx, cy))
                     return bool(occ and (occ - {net_name}) and (cx, cy) not in {(sgx, sgy), (dgx, dgy)})
-                near_terminal = (
-                    max(abs(cx - sgx), abs(cy - sgy)) <= start_clear_r
-                    or max(abs(cx - dgx), abs(cy - dgy)) <= start_clear_r
-                )
-                r_chk = 0 if near_terminal else extra_cells
-                for ox in range(-r_chk, r_chk + 1):
-                    for oy in range(-r_chk, r_chk + 1):
-                        if ox * ox + oy * oy > r_chk * r_chk + 1:
+                for ox in range(-radius, radius + 1):
+                    for oy in range(-radius, radius + 1):
+                        if ox * ox + oy * oy > radius * radius + 1:
                             continue
-                        occ = blocked[layer_idx].get((cx + ox, cy + oy))
-                        if occ and (occ - {net_name}) and (cx + ox, cy + oy) not in {(sgx, sgy), (dgx, dgy)}:
+                        tx, ty = cx + ox, cy + oy
+                        occ = blocked[layer_idx].get((tx, ty))
+                        if occ and (occ - {net_name}) and (tx, ty) not in {(sgx, sgy), (dgx, dgy)}:
                             return True
                 return False
 
@@ -1524,9 +1547,7 @@ def autoroute_pcb_nets(
 
                 if allow_vias:
                     oli = 1 - li
-                    occ0 = blocked[0].get((gx, gy), set()) - {net_name}
-                    occ1 = blocked[1].get((gx, gy), set()) - {net_name}
-                    if not occ0 and not occ1:
+                    if not _cell_blocked(0, gx, gy, via_r_cells) and not _cell_blocked(1, gx, gy, via_r_cells):
                         ng = g_curr + 6.0
                         vstate = (oli, gx, gy)
                         if ng < g_score.get(vstate, 1e18):

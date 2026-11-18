@@ -487,10 +487,11 @@ def create_schematic(
     components: list[dict[str, Any]],
     nets: list[dict[str, Any]],
     title: str = "",
+    append: bool = False,
 ) -> dict[str, Any]:
-    """Generate a KiCad 10 schematic with embedded symbols, pins, wires, and net labels."""
+    """Generate a KiCad 10 schematic or append new components/nets to an existing `.kicad_sch`."""
     return schematic_generator.create_schematic(
-        output_path, project_name, components, nets, title
+        output_path, project_name, components, nets, title, append=append
     )
 
 
