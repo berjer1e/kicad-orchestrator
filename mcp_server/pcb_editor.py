@@ -8,6 +8,7 @@ editing and 2-layer grid autorouting on `.kicad_pcb` files.
 from __future__ import annotations
 
 import heapq
+import json
 import math
 import os
 import re
@@ -1099,6 +1100,56 @@ def _discover_freerouting_env(
     return Path(java_bin), jar_path, kicad_py, None
 
 
+def _prepare_staged_kicad_pro(
+    source_pcb: Path,
+    staged_pcb: Path,
+    trace_width_mm: float,
+    clearance_mm: float,
+    via_size_mm: float,
+    via_drill_mm: float,
+    net_widths: dict[str, float] | None,
+) -> None:
+    """Write a staged `.kicad_pro` with Net Classes and clearances so `ExportSpecctraDSN` passes `net_widths` to Freerouting."""
+    src_pro = source_pcb.with_suffix(".kicad_pro")
+    dst_pro = staged_pcb.with_suffix(".kicad_pro")
+    data: dict[str, Any] = {}
+    if src_pro.is_file():
+        try:
+            data = json.loads(src_pro.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+
+    net_settings = data.setdefault("net_settings", {})
+    classes = list(net_settings.get("classes", []))
+    default_cls = next((c for c in classes if isinstance(c, dict) and c.get("name") == "Default"), None)
+    if default_cls is None:
+        default_cls = {"name": "Default"}
+        classes.insert(0, default_cls)
+    default_cls["clearance"] = float(clearance_mm)
+    default_cls["track_width"] = float(trace_width_mm)
+    default_cls["via_diameter"] = float(via_size_mm)
+    default_cls["via_drill"] = float(via_drill_mm)
+
+    assignments = dict(net_settings.get("netclass_assignments") or {})
+    for idx, (net_name, width_val) in enumerate(sorted((net_widths or {}).items())):
+        cls_name = f"MCP_W_{idx}"
+        classes = [c for c in classes if not (isinstance(c, dict) and c.get("name") == cls_name)]
+        classes.append(
+            {
+                "name": cls_name,
+                "clearance": float(clearance_mm),
+                "track_width": float(width_val),
+                "via_diameter": max(float(via_size_mm), float(width_val) * 0.8),
+                "via_drill": float(via_drill_mm),
+            }
+        )
+        assignments[str(net_name)] = cls_name
+
+    net_settings["classes"] = classes
+    net_settings["netclass_assignments"] = assignments
+    dst_pro.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def _run_freerouting(
     source_pcb: Path,
     dest_pcb: Path,
@@ -1106,12 +1157,26 @@ def _run_freerouting(
     jar_path: Path,
     kicad_py: Path,
     timeout_s: int = 120,
+    trace_width_mm: float = 0.3,
+    clearance_mm: float = 0.25,
+    via_size_mm: float = 0.6,
+    via_drill_mm: float = 0.3,
+    net_widths: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Export DSN via KiCad `pcbnew`, autoroute via Freerouting CLI, and import SES into `dest_pcb`."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         tdir = Path(tmp_dir)
         staged_pcb = tdir / source_pcb.name
         staged_pcb.write_text(source_pcb.read_text(encoding="utf-8"), encoding="utf-8")
+        _prepare_staged_kicad_pro(
+            source_pcb,
+            staged_pcb,
+            trace_width_mm=trace_width_mm,
+            clearance_mm=clearance_mm,
+            via_size_mm=via_size_mm,
+            via_drill_mm=via_drill_mm,
+            net_widths=net_widths,
+        )
         dsn_path = tdir / f"{source_pcb.stem}.dsn"
         ses_path = tdir / f"{source_pcb.stem}.ses"
 
@@ -1174,7 +1239,7 @@ def autoroute_pcb_nets(
     freerouting_jar: str | None = None,
     freerouting_timeout_s: int = 120,
 ) -> dict[str, Any]:
-    """Autoroute unrouted connections using Freerouting (when available) with automatic Python A* fallback."""
+    """Autoroute unrouted connections using Freerouting (when available) with automatic Python A* cleanup/fallback."""
     source = Path(pcb_path).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(f"PCB file does not exist: {source}")
@@ -1195,12 +1260,53 @@ def autoroute_pcb_nets(
                     jar_path,
                     kicad_py,
                     timeout_s=freerouting_timeout_s,
+                    trace_width_mm=trace_width_mm,
+                    clearance_mm=clearance_mm,
+                    via_size_mm=via_size_mm,
+                    via_drill_mm=via_drill_mm,
+                    net_widths=net_widths,
                 )
+                post_unrouted = pcb_inspector.find_unrouted_pads(str(dest_pcb))
+                remaining_nets = sorted(
+                    {
+                        p["net"]
+                        for p in (
+                            post_unrouted.get("completely_unrouted_pads", [])
+                            + post_unrouted.get("zone_only_pads", [])
+                        )
+                        if p.get("net") and (not nets or p["net"] in set(nets))
+                    }
+                )
+                if remaining_nets and router_mode == "auto":
+                    cleanup_res = autoroute_pcb_nets(
+                        pcb_path=str(dest_pcb),
+                        nets=remaining_nets,
+                        grid_step_mm=grid_step_mm,
+                        trace_width_mm=trace_width_mm,
+                        clearance_mm=clearance_mm,
+                        allow_vias=allow_vias,
+                        via_size_mm=via_size_mm,
+                        via_drill_mm=via_drill_mm,
+                        output_path=str(dest_pcb),
+                        net_widths=net_widths,
+                        auto_neckdown=auto_neckdown,
+                        router="astar",
+                    )
+                    return {
+                        **cleanup_res,
+                        "status": "ok" if dest_pcb == source else "ok_staged",
+                        "router_used": "freerouting+astar_cleanup",
+                        "cleanup_nets": remaining_nets,
+                        "source_pcb": str(source),
+                        "saved_path": str(dest_pcb),
+                        "lock_files": lock_info.get("lock_files", []),
+                    }
                 return {
                     "status": "ok" if dest_pcb == source else "ok_staged",
                     "router_used": "freerouting",
                     "source_pcb": str(source),
                     "saved_path": fr_res["saved_path"],
+                    "remaining_unrouted_nets": remaining_nets,
                     "lock_files": lock_info.get("lock_files", []),
                 }
             except Exception as exc:
