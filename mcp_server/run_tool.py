@@ -18,7 +18,7 @@ try:
     import server
     _SERVER_IMPORT_ERROR: str | None = None
 except ModuleNotFoundError as exc:
-    server = None  # type: ignore[assignment]
+    server = None
     _SERVER_IMPORT_ERROR = str(exc)
 
 _TOOLS: dict[str, Any] = {}
@@ -145,6 +145,10 @@ def main(argv: list[str] | None = None) -> int:
         help="JSON object of keyword arguments for the tool",
     )
     parser.add_argument(
+        "--args-file",
+        help="Path to a UTF-8 JSON file containing keyword arguments (avoids Windows 32 KB CLI limits)",
+    )
+    parser.add_argument(
         "--sync-schemas",
         action="store_true",
         help="Write and validate JSON schema files for all MCP tools, then exit",
@@ -183,13 +187,20 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("Provide a tool_name, --sync-schemas, or --save-state-summary.")
 
     try:
-        tool_args = json.loads(parsed.args)
+        if parsed.args_file:
+            args_path = Path(parsed.args_file).expanduser().resolve()
+            if not args_path.is_file():
+                print(json.dumps({"status": "error", "error": f"--args-file not found: {args_path}"}))
+                return 1
+            tool_args = json.loads(args_path.read_text(encoding="utf-8-sig"))
+        else:
+            tool_args = json.loads(parsed.args)
     except json.JSONDecodeError as exc:
-        print(json.dumps({"status": "error", "error": f"Invalid --args JSON: {exc}"}))
+        print(json.dumps({"status": "error", "error": f"Invalid arguments JSON: {exc}"}))
         return 1
 
     if not isinstance(tool_args, dict):
-        print(json.dumps({"status": "error", "error": "--args must decode to a JSON object."}))
+        print(json.dumps({"status": "error", "error": "Tool arguments must decode to a JSON object."}))
         return 1
 
     result = run_tool(parsed.tool_name, tool_args)

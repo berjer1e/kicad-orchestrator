@@ -1240,6 +1240,29 @@ def autoroute_pcb_nets(
             max_iters = 60000
             iters = 0
 
+            net_trace_w = float((net_widths or {}).get(net_name, trace_width_mm))
+            extra_cells = int(math.ceil(max(0.0, (net_trace_w - trace_width_mm) * 0.5) / step))
+            start_clear_r = max(2, extra_cells + 1)
+
+            def _cell_blocked(layer_idx: int, cx: int, cy: int) -> bool:
+                """Check whether routing a trace of width `net_trace_w` at `(cx, cy)` violates clearance."""
+                if extra_cells == 0:
+                    occ = blocked[layer_idx].get((cx, cy))
+                    return bool(occ and (occ - {net_name}) and (cx, cy) not in {(sgx, sgy), (dgx, dgy)})
+                near_terminal = (
+                    max(abs(cx - sgx), abs(cy - sgy)) <= start_clear_r
+                    or max(abs(cx - dgx), abs(cy - dgy)) <= start_clear_r
+                )
+                r_chk = 0 if near_terminal else extra_cells
+                for ox in range(-r_chk, r_chk + 1):
+                    for oy in range(-r_chk, r_chk + 1):
+                        if ox * ox + oy * oy > r_chk * r_chk + 1:
+                            continue
+                        occ = blocked[layer_idx].get((cx + ox, cy + oy))
+                        if occ and (occ - {net_name}) and (cx + ox, cy + oy) not in {(sgx, sgy), (dgx, dgy)}:
+                            return True
+                return False
+
             while open_heap and iters < max_iters:
                 iters += 1
                 _, g_curr, li, gx, gy = heapq.heappop(open_heap)
@@ -1253,8 +1276,7 @@ def autoroute_pcb_nets(
                     ngx, ngy = gx + dx, gy + dy
                     if not (0 <= ngx < nx and 0 <= ngy < ny):
                         continue
-                    occ = blocked[li].get((ngx, ngy))
-                    if occ and (occ - {net_name}) and (ngx, ngy) not in {(sgx, sgy), (dgx, dgy)}:
+                    if _cell_blocked(li, ngx, ngy):
                         continue
                     dir_bias = 0.05 if (li == 0 and dx == 0) or (li == 1 and dy == 0) else 0.0
                     ng = g_curr + step_cost + dir_bias
@@ -1295,10 +1317,13 @@ def autoroute_pcb_nets(
                 curr_state = came_from.get(curr_state)
             grid_path.reverse()
 
+            mark_r = max(0, extra_cells)
             for pli, pgx, pgy in grid_path:
-                blocked[pli].setdefault((pgx, pgy), set()).add(net_name)
+                for ox in range(-mark_r, mark_r + 1):
+                    for oy in range(-mark_r, mark_r + 1):
+                        if ox * ox + oy * oy <= mark_r * mark_r + 1:
+                            blocked[pli].setdefault((pgx + ox, pgy + oy), set()).add(net_name)
 
-            net_trace_w = float((net_widths or {}).get(net_name, trace_width_mm))
             segs, vias = _simplify_grid_path(
                 grid_path,
                 gx_to_x,

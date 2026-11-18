@@ -28,7 +28,7 @@ Coordinate KiCad 10 hardware design from specification or existing project to ve
    - `run_validations(target_path, validation_type="drc"|"erc"|"footprint"|"symbol"|"locks"|"version", ...)`
    - `export_project(target_path, output_path, export_type="gerbers"|"drill"|"step"|"sch_pdf"|"pcb_svg"|"3d", ...)`
 2. **Portable CLI Fallback (`run_tool.py`):** invoke the repository's
-   `mcp_server/run_tool.py` with compact JSON arguments; use
+   `mcp_server/run_tool.py` with compact JSON arguments (`--args` or `--args-file <path.json>` for large payloads); use
    `--save-state-summary` for the cached handoff artifact.
    Follow [`../shared/WORKFLOW.md`](../shared/WORKFLOW.md).
 3. **Zero-MCP Subagents + Disk-Cached State (`state_summary.json`):**
