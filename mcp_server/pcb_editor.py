@@ -316,16 +316,15 @@ def _format_edge_cuts(outline: dict[str, Any]) -> list[str]:
     return items
 
 
-def _format_zone(zone_spec: dict[str, Any], net_id: int, net_name: str) -> str:
+def _format_zone(
+    zone_spec: dict[str, Any],
+    net_id: int,
+    net_name: str,
+    fallback_bbox: dict[str, float] | None = None,
+) -> str:
     """Generate a KiCad 10 copper `(zone ...)` S-expression block.
 
-    Args:
-        zone_spec: Dictionary specifying `layer`, `x`, `y`, `width`, `height` (or `points`), `clearance_mm`, and `min_thickness_mm`.
-        net_id: Resolved integer net ID.
-        net_name: Resolved net name string.
-
-    Returns:
-        Formatted `(zone ...)` S-expression string.
+    Supports `points`, `min_x/min_y/max_x/max_y`, `x/y/width/height`, or falls back to `fallback_bbox`.
     """
     uid = str(uuid.uuid4())
     layer = str(zone_spec.get("layer", "B.Cu"))
@@ -336,12 +335,25 @@ def _format_zone(zone_spec: dict[str, Any], net_id: int, net_name: str) -> str:
 
     if "points" in zone_spec and zone_spec["points"]:
         pts = [(float(p[0]), float(p[1])) for p in zone_spec["points"]]
-    else:
+    elif all(k in zone_spec for k in ("min_x", "min_y", "max_x", "max_y")):
+        x0, y0 = float(zone_spec["min_x"]), float(zone_spec["min_y"])
+        x1, y1 = float(zone_spec["max_x"]), float(zone_spec["max_y"])
+        pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    elif "width" in zone_spec and "height" in zone_spec:
         x0 = float(zone_spec.get("x", 0.0))
         y0 = float(zone_spec.get("y", 0.0))
         w = float(zone_spec["width"])
         h = float(zone_spec["height"])
         pts = [(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h)]
+    elif fallback_bbox is not None:
+        inset = float(zone_spec.get("inset_mm", 0.3))
+        x0 = float(fallback_bbox["min_x"]) + inset
+        y0 = float(fallback_bbox["min_y"]) + inset
+        x1 = float(fallback_bbox["max_x"]) - inset
+        y1 = float(fallback_bbox["max_y"]) - inset
+        pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    else:
+        raise ValueError("Zone spec requires 'width'+'height', 'min_x/min_y/max_x/max_y', or 'points'.")
 
     xy_str = " ".join(f"(xy {round(px, 4):g} {round(py, 4):g})" for px, py in pts)
     return (
@@ -612,6 +624,61 @@ def _clean_footprint_silkscreen(
     return block, adjusted
 
 
+def _format_graphic_item(spec: dict[str, Any]) -> str:
+    """Format a `(gr_text ...)`, `(gr_rect ...)`, or `(gr_line ...)` silkscreen/fab graphic S-expression."""
+    kind = str(spec.get("type", "text")).strip().lower()
+    layer = str(spec.get("layer", "F.SilkS"))
+    uid = str(uuid.uuid4())
+    if kind in ("text", "gr_text"):
+        txt = str(spec.get("text", "")).replace('"', '\\"')
+        x = float(spec.get("x", 0.0))
+        y = float(spec.get("y", 0.0))
+        rot = float(spec.get("rotation", 0.0))
+        size = float(spec.get("size", 1.0))
+        thick = float(spec.get("thickness", 0.15))
+        rot_str = f" {rot:g}" if rot else ""
+        return (
+            f'\t(gr_text "{txt}"\n'
+            f"\t\t(at {x:g} {y:g}{rot_str})\n"
+            f'\t\t(layer "{layer}")\n'
+            f'\t\t(uuid "{uid}")\n'
+            f"\t\t(effects (font (size {size:g} {size:g}) (thickness {thick:g})))\n"
+            f"\t)"
+        )
+    if kind in ("rect", "gr_rect"):
+        x1 = float(spec.get("x1", spec.get("x", 0.0)))
+        y1 = float(spec.get("y1", spec.get("y", 0.0)))
+        x2 = float(spec.get("x2", x1 + float(spec.get("width", 10.0))))
+        y2 = float(spec.get("y2", y1 + float(spec.get("height", 10.0))))
+        width = float(spec.get("width_mm", spec.get("stroke_mm", 0.15)))
+        return (
+            f"\t(gr_rect\n"
+            f"\t\t(start {x1:g} {y1:g})\n"
+            f"\t\t(end {x2:g} {y2:g})\n"
+            f"\t\t(stroke (width {width:g}) (type default))\n"
+            f"\t\t(fill none)\n"
+            f'\t\t(layer "{layer}")\n'
+            f'\t\t(uuid "{uid}")\n'
+            f"\t)"
+        )
+    if kind in ("line", "gr_line"):
+        x1 = float(spec.get("x1", 0.0))
+        y1 = float(spec.get("y1", 0.0))
+        x2 = float(spec.get("x2", 0.0))
+        y2 = float(spec.get("y2", 0.0))
+        width = float(spec.get("width_mm", spec.get("stroke_mm", 0.15)))
+        return (
+            f"\t(gr_line\n"
+            f"\t\t(start {x1:g} {y1:g})\n"
+            f"\t\t(end {x2:g} {y2:g})\n"
+            f"\t\t(stroke (width {width:g}) (type default))\n"
+            f'\t\t(layer "{layer}")\n'
+            f'\t\t(uuid "{uid}")\n'
+            f"\t)"
+        )
+    raise ValueError(f"Unsupported graphic type: {kind!r}. Use 'text', 'rect', or 'line'.")
+
+
 def edit_pcb_layout(
     pcb_path: str,
     board_outline: dict[str, Any] | None = None,
@@ -621,6 +688,7 @@ def edit_pcb_layout(
     replace_footprints: dict[str, str | dict[str, Any]] | None = None,
     auto_fit_outline: dict[str, Any] | float | None = None,
     clean_silkscreen: bool | dict[str, Any] = False,
+    graphics: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Safely update board outline (`Edge.Cuts`), footprint placements/replacements, silkscreen, and copper zones."""
     source, dest, lock_info = _resolve_target_and_output(pcb_path, output_path, suffix="_layout")
@@ -647,9 +715,14 @@ def edit_pcb_layout(
     if zones:
         for zspec in zones:
             if zspec.get("replace_existing", True):
-                zid = _resolve_net_id(zspec.get("net", "GND"), name_to_id, id_to_name)
-                zlayer = str(zspec.get("layer", "B.Cu"))
-                replace_zone_keys.add((id_to_name[zid], zlayer))
+                znet = str(zspec.get("net", "GND"))
+                if znet in name_to_id:
+                    zid = _resolve_net_id(znet, name_to_id, id_to_name)
+                    zlayer = str(zspec.get("layer", "B.Cu"))
+                    replace_zone_keys.add((id_to_name[zid], zlayer))
+                elif not uses_int_ids:
+                    zlayer = str(zspec.get("layer", "B.Cu"))
+                    replace_zone_keys.add((znet, zlayer))
 
     tags_to_scan = {"footprint", "gr_rect", "gr_line", "gr_arc", "gr_poly", "zone"}
     blocks = _extract_top_level_blocks(text, tags_to_scan)
@@ -737,11 +810,32 @@ def edit_pcb_layout(
 
     added_zones = 0
     if zones:
+        fallback_bbox = None
+        if effective_outline:
+            fallback_bbox = {
+                "min_x": float(effective_outline["x"]),
+                "min_y": float(effective_outline["y"]),
+                "max_x": float(effective_outline["x"]) + float(effective_outline["width"]),
+                "max_y": float(effective_outline["y"]) + float(effective_outline["height"]),
+            }
+        else:
+            fallback_bbox = pcb_inspector._extract_board_bbox(pcb_inspector._parse_sexpr(updated_text))
         for zspec in zones:
-            zid = _resolve_net_id(zspec.get("net", "GND"), name_to_id, id_to_name)
+            znet = str(zspec.get("net", "GND"))
+            if znet not in name_to_id and not uses_int_ids:
+                new_id = max(id_to_name, default=0) + 1
+                name_to_id[znet] = new_id
+                id_to_name[new_id] = znet
+            zid = _resolve_net_id(znet, name_to_id, id_to_name)
             zname = id_to_name[zid]
-            appended_blocks.append(_format_zone(zspec, zid, zname))
+            appended_blocks.append(_format_zone(zspec, zid, zname, fallback_bbox=fallback_bbox))
             added_zones += 1
+
+    added_graphics = 0
+    if graphics:
+        for gspec in graphics:
+            appended_blocks.append(_format_graphic_item(gspec))
+            added_graphics += 1
 
     final_text = _insert_before_board_end(updated_text, appended_blocks)
     dest.write_text(final_text, encoding="utf-8")
@@ -760,6 +854,7 @@ def edit_pcb_layout(
         "added_edge_items": len(_format_edge_cuts(effective_outline)) if effective_outline else 0,
         "removed_zones": removed_zones,
         "added_zones": added_zones,
+        "added_graphics": added_graphics,
         "lock_files": lock_info.get("lock_files", []),
     }
 

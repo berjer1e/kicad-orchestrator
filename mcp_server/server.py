@@ -394,8 +394,9 @@ def edit_pcb_layout(
     replace_footprints: dict[str, str | dict[str, Any]] | None = None,
     auto_fit_outline: dict[str, Any] | float | None = None,
     clean_silkscreen: bool | dict[str, Any] = False,
+    graphics: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Update board outline (`Edge.Cuts`), footprint placements/replacements, silkscreen, and copper zones."""
+    """Update Edge.Cuts (`board_outline` `{x,y,width,height,corner_radius_mm}` or `auto_fit_outline`), footprints (`footprint_placements`, `replace_footprints`), `zones` (`{net,layer,x,y,width,height}` or `{min_x,min_y,max_x,max_y}` or `{points}` or auto board bbox), `clean_silkscreen`, and `graphics` (`[{type:'text'|'rect'|'line', ...}]`)."""
     return pcb_editor.edit_pcb_layout(
         pcb_path=pcb_path,
         board_outline=board_outline,
@@ -405,6 +406,7 @@ def edit_pcb_layout(
         replace_footprints=replace_footprints,
         auto_fit_outline=auto_fit_outline,
         clean_silkscreen=clean_silkscreen,
+        graphics=graphics,
     )
 
 
