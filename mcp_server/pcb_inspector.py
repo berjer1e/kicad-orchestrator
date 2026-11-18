@@ -787,7 +787,10 @@ def _parse_footprints_and_pads(
             net_name = _resolve_net_name(_first_child(pad_node, "net"), net_map)
 
             gx, gy = _local_to_global(px, py, fx, fy, frot)
-            for bx, by in _pad_bbox_points(gx, gy, sx, sy, pad_shape, prot):
+            pad_pts = _pad_bbox_points(gx, gy, sx, sy, pad_shape, prot)
+            pad_w_rot = max(pt[0] for pt in pad_pts) - min(pt[0] for pt in pad_pts)
+            pad_h_rot = max(pt[1] for pt in pad_pts) - min(pt[1] for pt in pad_pts)
+            for bx, by in pad_pts:
                 bbox_xs.append(bx)
                 bbox_ys.append(by)
 
@@ -801,8 +804,11 @@ def _parse_footprints_and_pads(
                     "pad_type": pad_type,
                     "x": round(gx, 4),
                     "y": round(gy, 4),
-                    "size_x": round(sx, 4),
-                    "size_y": round(sy, 4),
+                    "size_x": round(pad_w_rot, 4),
+                    "size_y": round(pad_h_rot, 4),
+                    "raw_size_x": round(sx, 4),
+                    "raw_size_y": round(sy, 4),
+                    "rotation": round(prot, 4),
                     "layers": layers,
                     "net": net_name,
                 }

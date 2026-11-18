@@ -244,7 +244,7 @@ def pcb_layout(
     graphics: list[dict[str, Any]] | None = None,
     output_path: str | None = None,
 ) -> dict[str, Any]:
-    """CRUD for `.kicad_pcb` layout: `read`, `add` footprints, `update` placements/replacements/Edge.Cuts/zones/graphics, or `remove` footprints/graphics."""
+    """CRUD for `.kicad_pcb` layout (`read`, `add`, `update`, `remove`). Keys: `board_outline` (`{x,y,width,height,corner_radius_mm}` or `x_mm/width_mm/height_mm`), `footprint_placements` (`{REF: {x,y,rotation,layer,flip,ref_at,hide_value}}` or `x_mm/y_mm/rotation_deg`), `zones` (`[{net,layer,x,y,width,height}]` or `min_x/max_x` or auto bbox), `graphics` (`[{type:'text'|'rect'|'line', ...}]`)."""
     act = action.strip().lower()
     if act in ("read", "inspect", "get"):
         return pcb_inspector.inspect_pcb_layout(pcb_path=pcb_path, compact=compact)

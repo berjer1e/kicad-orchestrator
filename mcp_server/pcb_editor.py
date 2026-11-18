@@ -55,14 +55,7 @@ def _resolve_target_and_output(
 
 
 def _parse_net_map(text: str) -> tuple[dict[str, int], dict[int, str], bool]:
-    """Extract net declarations from a `.kicad_pcb` file (supporting both integer-ID tables and KiCad 10 string nets).
-
-    Args:
-        text: Raw `.kicad_pcb` file text.
-
-    Returns:
-        Tuple of `(name_to_id, id_to_name, uses_integer_net_ids)`.
-    """
+    """Extract net declarations from a `.kicad_pcb` file (supporting integer-ID tables, KiCad 10 inline nets, and hybrid boards)."""
     name_to_id: dict[str, int] = {}
     id_to_name: dict[int, str] = {}
     for match in re.finditer(r'^\s*\(net\s+(\d+)\s+"([^"]*)"\)', text, flags=re.MULTILINE):
@@ -70,14 +63,17 @@ def _parse_net_map(text: str) -> tuple[dict[str, int], dict[int, str], bool]:
         net_name = match.group(2)
         name_to_id[net_name] = net_id
         id_to_name[net_id] = net_name
-    if name_to_id:
-        return name_to_id, id_to_name, True
 
-    all_names = sorted({m.group(1) for m in re.finditer(r'\(net\s+"([^"]+)"\)', text)})
-    for idx, net_name in enumerate(all_names, start=1):
-        name_to_id[net_name] = idx
-        id_to_name[idx] = net_name
-    return name_to_id, id_to_name, False
+    inline_names = [m.group(1) for m in re.finditer(r'\(net\s+"([^"]+)"\)', text)]
+    has_top_level_decls = bool(name_to_id)
+    for net_name in sorted(set(inline_names)):
+        if net_name not in name_to_id:
+            next_id = max(id_to_name, default=0) + 1
+            name_to_id[net_name] = next_id
+            id_to_name[next_id] = net_name
+
+    uses_int_ids = has_top_level_decls and not bool(inline_names)
+    return name_to_id, id_to_name, uses_int_ids
 
 
 def _format_net_token(net_id: int, id_to_name: dict[int, str], uses_int_ids: bool) -> str:
@@ -245,19 +241,22 @@ def _format_via(
 
 
 def _format_edge_cuts(outline: dict[str, Any]) -> list[str]:
-    """Generate `Edge.Cuts` graphic blocks for a rectangular or rounded-corner board outline.
-
-    Args:
-        outline: Dictionary with `x`, `y`, `width`, `height`, and optional `corner_radius_mm` and `stroke_width`.
-
-    Returns:
-        List of S-expression graphic item strings (`gr_rect`, `gr_line`, `gr_arc`).
-    """
-    x0 = float(outline.get("x", 0.0))
-    y0 = float(outline.get("y", 0.0))
-    w = float(outline["width"])
-    h = float(outline["height"])
-    r = float(outline.get("corner_radius_mm", 0.0))
+    """Generate `Edge.Cuts` graphic blocks supporting `x/x_mm/min_x`, `y/y_mm/min_y`, `width/width_mm`, `height/height_mm`, and `corner_radius_mm`."""
+    x0 = float(outline.get("x", outline.get("x_mm", outline.get("min_x", 0.0))))
+    y0 = float(outline.get("y", outline.get("y_mm", outline.get("min_y", 0.0))))
+    if "width" in outline or "width_mm" in outline:
+        w = float(outline.get("width", outline.get("width_mm", 0.0)))
+    elif "max_x" in outline:
+        w = float(outline["max_x"]) - x0
+    else:
+        raise ValueError("board_outline requires 'width' (or 'width_mm' / 'max_x').")
+    if "height" in outline or "height_mm" in outline:
+        h = float(outline.get("height", outline.get("height_mm", 0.0)))
+    elif "max_y" in outline:
+        h = float(outline["max_y"]) - y0
+    else:
+        raise ValueError("board_outline requires 'height' (or 'height_mm' / 'max_y').")
+    r = float(outline.get("corner_radius_mm", outline.get("corner_radius", 0.0)))
     sw = float(outline.get("stroke_width", 0.1))
     x1 = x0 + w
     y1 = y0 + h
@@ -376,21 +375,81 @@ def _format_zone(
     )
 
 
+_ALLOWED_PLACEMENT_KEYS = {
+    "x",
+    "x_mm",
+    "y",
+    "y_mm",
+    "rotation",
+    "rotation_deg",
+    "layer",
+    "side",
+    "flip",
+    "ref_at",
+    "hide_value",
+}
+
+
+def _flip_footprint_block(block: str, target_layer: str) -> str:
+    """Flip a `(footprint ...)` between `F.Cu` and `B.Cu`, mirroring child X coordinates and F.*/B.* layers."""
+    layer_swap = {
+        "F.Cu": "B.Cu",
+        "B.Cu": "F.Cu",
+        "F.SilkS": "B.SilkS",
+        "B.SilkS": "F.SilkS",
+        "F.Silkscreen": "B.Silkscreen",
+        "B.Silkscreen": "F.Silkscreen",
+        "F.Mask": "B.Mask",
+        "B.Mask": "F.Mask",
+        "F.Paste": "B.Paste",
+        "B.Paste": "F.Paste",
+        "F.CrtYd": "B.CrtYd",
+        "B.CrtYd": "F.CrtYd",
+        "F.Courtyard": "B.Courtyard",
+        "B.Courtyard": "F.Courtyard",
+        "F.Fab": "B.Fab",
+        "B.Fab": "F.Fab",
+    }
+    hdr_end = re.search(r"\((?:property|fp_text|fp_line|fp_rect|fp_circle|fp_arc|fp_poly|pad|model)\b", block)
+    split_idx = hdr_end.start() if hdr_end else len(block)
+    hdr, body = block[:split_idx], block[split_idx:]
+    hdr = re.sub(r'(\(layer\s+")[^"]+(")', rf"\1{target_layer}\2", hdr, count=1)
+
+    def _swap_layers_token(m: re.Match[str]) -> str:
+        """Swap `F.*` and `B.*` layer names inside quoted strings."""
+        val = m.group(1)
+        return f'"{layer_swap.get(val, val)}"'
+
+    body = re.sub(r'"([FB]\.(?:Cu|SilkS|Silkscreen|Mask|Paste|CrtYd|Courtyard|Fab))"', _swap_layers_token, body)
+    body = re.sub(
+        r"\((at|start|end|mid|center|xy)\s+([-\d.]+)\s+([-\d.]+)",
+        lambda m: f"({m.group(1)} {-float(m.group(2)):g} {float(m.group(3)):g}",
+        body,
+    )
+    return hdr + body
+
+
 def _update_footprint_block(block: str, spec: dict[str, Any]) -> str:
-    """Update a `(footprint ...)` block's position, rotation, layer, and property text settings.
+    """Update a `(footprint ...)` block's position (`x`/`x_mm`, `y`/`y_mm`), rotation, `layer`/`flip`, and `ref_at`."""
+    if not isinstance(spec, dict):
+        raise ValueError(f"Placement spec must be an object, got {type(spec).__name__}.")
+    if not any(k in spec for k in _ALLOWED_PLACEMENT_KEYS):
+        raise ValueError(
+            f"Unsupported placement keys {sorted(spec)}. Expected keys from {sorted(_ALLOWED_PLACEMENT_KEYS)}."
+        )
 
-    Args:
-        block: Existing `(footprint ...)` S-expression string.
-        spec: Placement dictionary with optional `x`, `y`, `rotation`, `ref_at`, and `hide_value`.
-
-    Returns:
-        Updated `(footprint ...)` S-expression string.
-    """
     updated = block
-    if "x" in spec and "y" in spec:
-        x = float(spec["x"])
-        y = float(spec["y"])
-        rot = spec.get("rotation")
+    if ("x" in spec or "x_mm" in spec) and ("y" in spec or "y_mm" in spec):
+        x = float(spec.get("x", spec.get("x_mm", 0.0)))
+        y = float(spec.get("y", spec.get("y_mm", 0.0)))
+        rot = spec.get("rotation", spec.get("rotation_deg"))
+        if rot is None:
+            m_old_at = re.search(
+                r"\(footprint\s+\"[^\"]+\"(?:\s+\([a-zA-Z0-9_]+[^\)]*\))*?\s+\(at\s+[-0-9.]+\s+[-0-9.]+(?:\s+([-0-9.]+))?\)",
+                updated,
+            )
+            if m_old_at and m_old_at.group(1) is not None:
+                rot = float(m_old_at.group(1))
         at_str = (
             f"(at {round(x, 4):g} {round(y, 4):g} {round(float(rot), 4):g})"
             if rot is not None and float(rot) != 0.0
@@ -402,6 +461,21 @@ def _update_footprint_block(block: str, spec: dict[str, Any]) -> str:
             updated,
             count=1,
         )
+
+    desired_layer: str | None = None
+    m_cur_layer = re.search(r'\(layer\s+"([^"]+)"\)', updated)
+    cur_layer = m_cur_layer.group(1) if m_cur_layer else "F.Cu"
+    if "layer" in spec or "side" in spec:
+        raw_lyr = str(spec.get("layer", spec.get("side", ""))).strip()
+        if raw_lyr.lower() in ("b", "back", "bottom", "b.cu"):
+            desired_layer = "B.Cu"
+        elif raw_lyr.lower() in ("f", "front", "top", "f.cu"):
+            desired_layer = "F.Cu"
+    if spec.get("flip"):
+        desired_layer = "B.Cu" if cur_layer == "F.Cu" else "F.Cu"
+    if desired_layer and desired_layer != cur_layer:
+        updated = _flip_footprint_block(updated, desired_layer)
+
     if "ref_at" in spec and isinstance(spec["ref_at"], (list, tuple)) and len(spec["ref_at"]) >= 2:
         rx, ry = float(spec["ref_at"][0]), float(spec["ref_at"][1])
         rrot = float(spec["ref_at"][2]) if len(spec["ref_at"]) >= 3 else 0.0
@@ -413,6 +487,13 @@ def _update_footprint_block(block: str, spec: dict[str, Any]) -> str:
         updated = re.sub(
             r'(\(property\s+"Reference"\s+"[^"]+"\s+)\(at\s+[-0-9.]+\s+[-0-9.]+(?:\s+[-0-9.]+)?\)',
             rf"\1{ref_at_str}",
+            updated,
+            count=1,
+        )
+    if spec.get("hide_value"):
+        updated = re.sub(
+            r'(\(property\s+"Value"\s+"[^"]+"(?:\s+\([^)]*\))*?)\)',
+            lambda m: m.group(0) if "(hide yes)" in m.group(0) else m.group(1) + " (hide yes))",
             updated,
             count=1,
         )
@@ -1460,14 +1541,27 @@ def autoroute_pcb_nets(
                     via_drill_mm=via_drill_mm,
                     net_widths=net_widths,
                 )
+                zones_refilled = False
+                if "(zone" in dest_pcb.read_text(encoding="utf-8"):
+                    try:
+                        from cli_wrapper import KiCadCLI
+
+                        refill_res = KiCadCLI().refill_pcb_zones(
+                            str(dest_pcb),
+                            output_path=str(dest_pcb),
+                            force_when_locked=True,
+                        )
+                        zones_refilled = refill_res.get("status") in ("ok", "ok_staged")
+                    except Exception:
+                        zones_refilled = False
                 post_unrouted = pcb_inspector.find_unrouted_pads(str(dest_pcb))
+                cleanup_candidates = post_unrouted.get("completely_unrouted_pads", [])
+                if not zones_refilled:
+                    cleanup_candidates = cleanup_candidates + post_unrouted.get("zone_only_pads", [])
                 remaining_nets = sorted(
                     {
                         p["net"]
-                        for p in (
-                            post_unrouted.get("completely_unrouted_pads", [])
-                            + post_unrouted.get("zone_only_pads", [])
-                        )
+                        for p in cleanup_candidates
                         if p.get("net") and (not nets or p["net"] in set(nets))
                     }
                 )
@@ -1490,6 +1584,7 @@ def autoroute_pcb_nets(
                         **cleanup_res,
                         "status": "ok" if dest_pcb == source else "ok_staged",
                         "router_used": "freerouting+astar_cleanup",
+                        "zones_refilled": zones_refilled,
                         "cleanup_nets": remaining_nets,
                         "source_pcb": str(source),
                         "saved_path": str(dest_pcb),
@@ -1498,6 +1593,7 @@ def autoroute_pcb_nets(
                 return {
                     "status": "ok" if dest_pcb == source else "ok_staged",
                     "router_used": "freerouting",
+                    "zones_refilled": zones_refilled,
                     "source_pcb": str(source),
                     "saved_path": fr_res["saved_path"],
                     "remaining_unrouted_nets": remaining_nets,
@@ -1763,6 +1859,8 @@ def autoroute_pcb_nets(
                     if not (0 <= ngx < nx and 0 <= ngy < ny):
                         continue
                     if _cell_blocked(li, ngx, ngy):
+                        continue
+                    if dx != 0 and dy != 0 and (_cell_blocked(li, gx + dx, gy) or _cell_blocked(li, gx, gy + dy)):
                         continue
                     dir_bias = 0.05 if (li == 0 and dx == 0) or (li == 1 and dy == 0) else 0.0
                     ng = g_curr + step_cost + dir_bias
