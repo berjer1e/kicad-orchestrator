@@ -697,7 +697,20 @@ def parse_bom_spec(source: str) -> dict[str, Any]:
             if current_revision is not None:
                 current_revision["sections"].append(line)
             upper = line.upper()
-            if "ГАЙД" in upper or any(k in upper for k in ("НЮАНС", "ТОПОЛОГІЯ", "СХЕМОТЕХНІК", "ПРАВИЛА", "RULES", "LAYOUT")):
+            if any(
+                k in upper
+                for k in (
+                    "ГАЙД",
+                    "GUIDE",
+                    "НЮАНС",
+                    "ТОПОЛОГІЯ",
+                    "СХЕМОТЕХНІК",
+                    "ПРАВИЛА",
+                    "RULES",
+                    "LAYOUT",
+                    "NOTES",
+                )
+            ):
                 current_mode = "rules"
             elif "PINOUT" in upper or "ПІДКЛЮЧЕННЯ" in upper:
                 current_mode = "pinout"
