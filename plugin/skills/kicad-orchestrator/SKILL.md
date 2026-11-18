@@ -18,13 +18,15 @@ Coordinate KiCad 10 hardware design from specification or existing project to ve
    - **NEVER launch a multi-agent Swarm** when designing, routing, or auditing a single KiCad project / single `.kicad_pcb` file — even if the prompt mentions `/teamwork` or parallel workers.
    - Schematic/netlist setup -> PCB placement/routing -> verification/export are strictly sequential stages on the same `.kicad_pcb` file; parallel workers cannot edit one PCB concurrently and waste quota waiting on locks. Always execute sequentially in a single agent context via `run_electrical_pipeline` / `run_tool.py`.
 
-1. **22 Consolidated Tools (`kicad-orchestrator_kicad_mcp` or `run_tool.py`):**
-   - `parse_bom`, `manage_design_decisions`, `list_modules`, `generate_module(module_name, output_dir, kind="both", overrides=None)`
-   - `inspect_pcb_layout(pcb_path, compact=True)`, `find_unrouted_pads`, `check_mechanical_fit`, `analyze_pcb_traces`
-   - `create_kicad_project`, `add_footprints_to_pcb`, `edit_pcb_layout(board_outline, footprint_placements, replace_footprints, auto_fit_outline, clean_silkscreen, zones, graphics)`, `add_nets_to_pcb`, `assign_pad_nets`, `create_netlist_from_bom`, `apply_netlist_to_pcb`
-   - `run_electrical_pipeline`
-   - `create_schematic(..., append=False)` (`append=True` adds components/nets to an existing `.kicad_sch`)
-   - `edit_pcb_traces`, `autoroute_pcb_nets`, `refill_pcb_zones`
+1. **10 Unified CRUD/Workflow Tools (`kicad-orchestrator_kicad_mcp` or `run_tool.py`):**
+   - `project(action="create"|"parse_bom"|"decisions", ...)`
+   - `module(action="list"|"generate", ...)`
+   - `schematic(action="create"|"append"|"remove", ...)`
+   - `pcb_layout(action="read"|"add"|"update"|"remove", ...)`
+   - `pcb_nets(action="create_manifest"|"declare"|"assign"|"apply", ...)`
+   - `pcb_traces(action="edit"|"autoroute"|"refill_zones", ...)`
+   - `pcb_audit(check="all"|"unrouted"|"traces"|"mechanical", ...)`
+   - `run_electrical_pipeline(...)`
    - `run_validations(target_path, validation_type="drc"|"erc"|"footprint"|"symbol"|"locks"|"version", compact=True, errors_only=False, ...)`
    - `export_project(target_path, output_path, export_type="gerbers"|"drill"|"step"|"sch_pdf"|"pcb_svg"|"3d", ...)`
 2. **Portable CLI Fallback (`run_tool.py`):** invoke `$env:KICAD_MCP_ROOT\run_tool.py` (located in the MCP server's `mcp_server/` directory, NOT inside the plugin folder) with compact JSON arguments (`--args` or `--args-file <path.json>` for large payloads); use `--save-state-summary` for the cached handoff artifact. Follow [`../shared/WORKFLOW.md`](../shared/WORKFLOW.md).

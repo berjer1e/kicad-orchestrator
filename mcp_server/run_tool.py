@@ -24,28 +24,49 @@ except ModuleNotFoundError as exc:
 _TOOLS: dict[str, Any] = {}
 if server is not None:
     _TOOLS = {
-        "export_project": server.export_project,
-        "run_validations": server.run_validations,
-        "generate_module": server.generate_module,
-        "refill_pcb_zones": server.refill_pcb_zones,
-        "inspect_pcb_layout": server.inspect_pcb_layout,
-        "find_unrouted_pads": server.find_unrouted_pads,
-        "check_mechanical_fit": server.check_mechanical_fit,
-        "analyze_pcb_traces": server.analyze_pcb_traces,
-        "manage_design_decisions": server.manage_design_decisions,
-        "list_modules": server.list_modules,
-        "parse_bom": server.parse_bom,
-        "create_kicad_project": server.create_kicad_project,
-        "add_footprints_to_pcb": server.add_footprints_to_pcb,
-        "edit_pcb_layout": server.edit_pcb_layout,
-        "add_nets_to_pcb": server.add_nets_to_pcb,
-        "assign_pad_nets": server.assign_pad_nets,
-        "create_netlist_from_bom": server.create_netlist_from_bom,
-        "apply_netlist_to_pcb": server.apply_netlist_to_pcb,
+        "project": server.project,
+        "module": server.module,
+        "schematic": server.schematic,
+        "pcb_layout": server.pcb_layout,
+        "pcb_nets": server.pcb_nets,
+        "pcb_traces": server.pcb_traces,
+        "pcb_audit": server.pcb_audit,
         "run_electrical_pipeline": server.run_electrical_pipeline,
-        "create_schematic": server.create_schematic,
-        "edit_pcb_traces": server.edit_pcb_traces,
-        "autoroute_pcb_nets": server.autoroute_pcb_nets,
+        "run_validations": server.run_validations,
+        "export_project": server.export_project,
+        "create_kicad_project": lambda **kw: server.project(action="create", **kw),
+        "parse_bom": lambda **kw: server.project(action="parse_bom", **kw),
+        "manage_design_decisions": lambda **kw: server.project(
+            action="decisions",
+            project_dir=kw.get("project_dir", ""),
+            decision_action=kw.get("action", "check"),
+            decisions=kw.get("decisions"),
+            bom_or_pcb_path=kw.get("bom_or_pcb_path"),
+        ),
+        "list_modules": lambda **kw: server.module(action="list", **kw),
+        "generate_module": lambda **kw: server.module(action="generate", **kw),
+        "create_schematic": lambda **kw: server.schematic(
+            action=("append" if kw.get("append") else "create"),
+            output_path=kw.get("output_path", ""),
+            project_name=kw.get("project_name", ""),
+            components=kw.get("components"),
+            nets=kw.get("nets"),
+            title=kw.get("title", ""),
+            remove_references=kw.get("remove_references"),
+        ),
+        "inspect_pcb_layout": lambda **kw: server.pcb_layout(action="read", **kw),
+        "add_footprints_to_pcb": lambda **kw: server.pcb_layout(action="add", **kw),
+        "edit_pcb_layout": lambda **kw: server.pcb_layout(action="update", **kw),
+        "create_netlist_from_bom": lambda **kw: server.pcb_nets(action="create_manifest", **kw),
+        "add_nets_to_pcb": lambda **kw: server.pcb_nets(action="declare", **kw),
+        "assign_pad_nets": lambda **kw: server.pcb_nets(action="assign", **kw),
+        "apply_netlist_to_pcb": lambda **kw: server.pcb_nets(action="apply", **kw),
+        "edit_pcb_traces": lambda **kw: server.pcb_traces(action="edit", **kw),
+        "autoroute_pcb_nets": lambda **kw: server.pcb_traces(action="autoroute", **kw),
+        "refill_pcb_zones": lambda **kw: server.pcb_traces(action="refill_zones", **kw),
+        "find_unrouted_pads": lambda **kw: server.pcb_audit(check="unrouted", **kw),
+        "analyze_pcb_traces": lambda **kw: server.pcb_audit(check="traces", **kw),
+        "check_mechanical_fit": lambda **kw: server.pcb_audit(check="mechanical", **kw),
     }
 
 
@@ -87,10 +108,11 @@ def save_state_summary(pcb_path: str, output_json: str) -> dict[str, Any]:
     out_file = Path(output_json).expanduser().resolve()
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
-    layout = server.inspect_pcb_layout(pcb_path=str(resolved_pcb), compact=True)
-    unrouted = server.find_unrouted_pads(pcb_path=str(resolved_pcb))
-    traces = server.analyze_pcb_traces(pcb_path=str(resolved_pcb))
-    fit = server.check_mechanical_fit(pcb_path=str(resolved_pcb))
+    layout = server.pcb_layout(action="read", pcb_path=str(resolved_pcb), compact=True)
+    audit = server.pcb_audit(pcb_path=str(resolved_pcb), check="all")
+    unrouted = audit["unrouted_pads"]
+    traces = audit["traces"]
+    fit = audit["mechanical_fit"]
 
     payload = {
         "pcb_path": str(resolved_pcb),
