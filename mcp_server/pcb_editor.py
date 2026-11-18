@@ -1383,7 +1383,7 @@ def autoroute_pcb_nets(
         return round(min_y + gy * step, 4)
 
     blocked: list[dict[tuple[int, int], set[str]]] = [{}, {}]
-    keepout = clearance_mm + trace_width_mm * 0.5
+    keepout = clearance_mm + trace_width_mm * 0.5 + step * 0.5
 
     for pad in all_pads:
         px, py = float(pad["x"]), float(pad["y"])
@@ -1451,34 +1451,81 @@ def autoroute_pcb_nets(
     for net_name, net_pads in sorted(pads_by_net.items()):
         if len(net_pads) < 2:
             continue
-        needs_routing = [
-            p for p in net_pads if (p["reference"], str(p["pad_number"]), net_name) in unrouted_keys
-        ]
-        if not needs_routing and target_net_set is None:
-            continue
 
-        connected = [net_pads[0]]
-        remaining = list(net_pads[1:])
-        while remaining:
-            best_pair = None
+        parent = list(range(len(net_pads)))
+
+        def _uf_find(idx: int) -> int:
+            """Find Disjoint-Set representative for pad index."""
+            while parent[idx] != idx:
+                parent[idx] = parent[parent[idx]]
+                idx = parent[idx]
+            return idx
+
+        def _uf_union(a: int, b: int) -> None:
+            """Merge two pad clusters in Disjoint-Set."""
+            ra, rb = _uf_find(a), _uf_find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        net_segs = [s for s in segments if str(s.get("net", "")) == net_name]
+        if net_segs:
+            seg_adj: dict[tuple[str, float, float], list[tuple[str, float, float]]] = {}
+            for s in net_segs:
+                lyr = str(s.get("layer", ""))
+                p1 = (lyr, round(float(s["x1"]), 3), round(float(s["y1"]), 3))
+                p2 = (lyr, round(float(s["x2"]), 3), round(float(s["y2"]), 3))
+                seg_adj.setdefault(p1, []).append(p2)
+                seg_adj.setdefault(p2, []).append(p1)
+
+            pad_clusters: dict[int, set[tuple[str, float, float]]] = {}
+            for idx, pad in enumerate(net_pads):
+                px, py = float(pad["x"]), float(pad["y"])
+                conn_r = max(min(float(pad.get("size_x", 1.0)), float(pad.get("size_y", 1.0))) * 0.5, 0.25) + 0.05
+                plyrs = pad.get("layers", [])
+                seeds = [
+                    pt
+                    for pt in seg_adj
+                    if any(
+                        pt[0] == pl or (pl == "*.Cu" and pt[0] in ("F.Cu", "B.Cu"))
+                        for pl in plyrs
+                    )
+                    and math.hypot(pt[1] - px, pt[2] - py) <= conn_r
+                ]
+                visited: set[tuple[str, float, float]] = set(seeds)
+                stack = list(seeds)
+                while stack:
+                    cur = stack.pop()
+                    for nxt in seg_adj.get(cur, ()):
+                        if nxt not in visited:
+                            visited.add(nxt)
+                            stack.append(nxt)
+                pad_clusters[idx] = visited
+            for i in range(len(net_pads)):
+                if not pad_clusters[i]:
+                    continue
+                for j in range(i + 1, len(net_pads)):
+                    if pad_clusters[i] & pad_clusters[j]:
+                        _uf_union(i, j)
+
+        while len({_uf_find(i) for i in range(len(net_pads))}) > 1:
+            best_pair: tuple[int, int] | None = None
             best_dist = 1e18
-            for cpad in connected:
-                for rpad in remaining:
-                    d = math.hypot(float(cpad["x"]) - float(rpad["x"]), float(cpad["y"]) - float(rpad["y"]))
+            for i in range(len(net_pads)):
+                for j in range(i + 1, len(net_pads)):
+                    if _uf_find(i) == _uf_find(j):
+                        continue
+                    d = math.hypot(
+                        float(net_pads[i]["x"]) - float(net_pads[j]["x"]),
+                        float(net_pads[i]["y"]) - float(net_pads[j]["y"]),
+                    )
                     if d < best_dist:
                         best_dist = d
-                        best_pair = (cpad, rpad)
+                        best_pair = (i, j)
             if best_pair is None:
                 break
-            src_pad, dst_pad = best_pair
-            remaining.remove(dst_pad)
-            connected.append(dst_pad)
-
-            if (
-                (src_pad["reference"], str(src_pad["pad_number"]), net_name) not in unrouted_keys
-                and (dst_pad["reference"], str(dst_pad["pad_number"]), net_name) not in unrouted_keys
-            ):
-                continue
+            src_idx, dst_idx = best_pair
+            src_pad, dst_pad = net_pads[src_idx], net_pads[dst_idx]
+            _uf_union(src_idx, dst_idx)
 
             sgx, sgy = x_to_gx(float(src_pad["x"])), y_to_gy(float(src_pad["y"]))
             dgx, dgy = x_to_gx(float(dst_pad["x"])), y_to_gy(float(dst_pad["y"]))
@@ -1574,11 +1621,18 @@ def autoroute_pcb_nets(
             grid_path.reverse()
 
             mark_r = max(0, extra_cells)
-            for pli, pgx, pgy in grid_path:
+            for idx_gp, (pli, pgx, pgy) in enumerate(grid_path):
                 for ox in range(-mark_r, mark_r + 1):
                     for oy in range(-mark_r, mark_r + 1):
                         if ox * ox + oy * oy <= mark_r * mark_r + 1:
                             blocked[pli].setdefault((pgx + ox, pgy + oy), set()).add(net_name)
+                if idx_gp > 0 and grid_path[idx_gp - 1][0] != pli:
+                    vr = max(1, via_r_cells + 1)
+                    for ox in range(-vr, vr + 1):
+                        for oy in range(-vr, vr + 1):
+                            if ox * ox + oy * oy <= vr * vr + 1:
+                                blocked[0].setdefault((pgx + ox, pgy + oy), set()).add(net_name)
+                                blocked[1].setdefault((pgx + ox, pgy + oy), set()).add(net_name)
 
             segs, vias = _simplify_grid_path(
                 grid_path,
@@ -1589,16 +1643,24 @@ def autoroute_pcb_nets(
                 via_size_mm,
                 via_drill_mm,
             )
-            if segs:
-                segs[0]["start"] = [round(float(src_pad["x"]), 4), round(float(src_pad["y"]), 4)]
-                segs[-1]["end"] = [round(float(dst_pad["x"]), 4), round(float(dst_pad["y"]), 4)]
-                if auto_neckdown:
-                    src_pad_w = min(float(src_pad.get("size_x", net_trace_w)), float(src_pad.get("size_y", net_trace_w)))
-                    dst_pad_w = min(float(dst_pad.get("size_x", net_trace_w)), float(dst_pad.get("size_y", net_trace_w)))
-                    if net_trace_w > src_pad_w * 0.9:
-                        segs[0]["width"] = round(max(0.2, min(net_trace_w, src_pad_w * 0.85)), 3)
-                    if net_trace_w > dst_pad_w * 0.9:
-                        segs[-1]["width"] = round(max(0.2, min(net_trace_w, dst_pad_w * 0.85)), 3)
+            src_xy = [round(float(src_pad["x"]), 4), round(float(src_pad["y"]), 4)]
+            dst_xy = [round(float(dst_pad["x"]), 4), round(float(dst_pad["y"]), 4)]
+            s0_xy = [gx_to_x(grid_path[0][1]), gy_to_y(grid_path[0][2])]
+            d0_xy = [gx_to_x(grid_path[-1][1]), gy_to_y(grid_path[-1][2])]
+            src_lyr_name = "F.Cu" if grid_path[0][0] == 0 else "B.Cu"
+            dst_lyr_name = "F.Cu" if grid_path[-1][0] == 0 else "B.Cu"
+            src_pad_w = min(float(src_pad.get("size_x", net_trace_w)), float(src_pad.get("size_y", net_trace_w)))
+            dst_pad_w = min(float(dst_pad.get("size_x", net_trace_w)), float(dst_pad.get("size_y", net_trace_w)))
+            src_neck_w = round(max(0.2, min(net_trace_w, src_pad_w * 0.85)), 3) if (auto_neckdown and net_trace_w > src_pad_w * 0.9) else net_trace_w
+            dst_neck_w = round(max(0.2, min(net_trace_w, dst_pad_w * 0.85)), 3) if (auto_neckdown and net_trace_w > dst_pad_w * 0.9) else net_trace_w
+            if math.hypot(src_xy[0] - s0_xy[0], src_xy[1] - s0_xy[1]) > 0.01:
+                segs.insert(0, {"start": src_xy, "end": s0_xy, "width": src_neck_w, "layer": src_lyr_name, "net": net_name})
+            elif segs and auto_neckdown and net_trace_w > src_pad_w * 0.9:
+                segs[0]["width"] = src_neck_w
+            if math.hypot(dst_xy[0] - d0_xy[0], dst_xy[1] - d0_xy[1]) > 0.01:
+                segs.append({"start": d0_xy, "end": dst_xy, "width": dst_neck_w, "layer": dst_lyr_name, "net": net_name})
+            elif segs and auto_neckdown and net_trace_w > dst_pad_w * 0.9:
+                segs[-1]["width"] = dst_neck_w
             all_new_segments.extend(segs)
             all_new_vias.extend(vias)
             routed_connections.append(
