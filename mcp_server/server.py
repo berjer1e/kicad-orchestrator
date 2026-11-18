@@ -514,8 +514,9 @@ def edit_pcb_traces(
     clear_nets: list[str | int] | None = None,
     clear_bbox: dict[str, Any] | None = None,
     output_path: str | None = None,
+    buses: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Add or remove copper `(segment ...)` and `(via ...)` items with KiCad-version-safe net encoding."""
+    """Add or remove copper `(segment ...)`, `(via ...)`, and multi-pad `buses` (`[{net, pins, layer, width, axis}]`)."""
     return pcb_editor.edit_pcb_traces(
         pcb_path=pcb_path,
         add_segments=add_segments,
@@ -523,6 +524,7 @@ def edit_pcb_traces(
         clear_nets=clear_nets,
         clear_bbox=clear_bbox,
         output_path=output_path,
+        buses=buses,
     )
 
 

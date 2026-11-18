@@ -972,20 +972,9 @@ def edit_pcb_traces(
     clear_nets: list[str | int] | None = None,
     clear_bbox: dict[str, Any] | None = None,
     output_path: str | None = None,
+    buses: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Safely add or remove copper `(segment ...)` and `(via ...)` items with validated integer net IDs.
-
-    Args:
-        pcb_path: Path to the source `.kicad_pcb` file.
-        add_segments: Optional list of segment dicts `[{"start": [x1, y1], "end": [x2, y2], "width": 0.3, "layer": "F.Cu", "net": "GND"}]`.
-        add_vias: Optional list of via dicts `[{"at": [x, y], "size": 0.6, "drill": 0.3, "layers": ["F.Cu", "B.Cu"], "net": "GND"}]`.
-        clear_nets: Optional list of net names or integer IDs whose existing segments and vias should be removed first.
-        clear_bbox: Optional bounding-box filter `{"min_x": float, "min_y": float, "max_x": float, "max_y": float, "layers": ["F.Cu"]}` for removing items.
-        output_path: Optional output `.kicad_pcb` path (stages to `<stem>_traces.kicad_pcb` if locked and `output_path` is None).
-
-    Returns:
-        Dictionary summarizing removed items, added segments/vias, `saved_path`, and lock status.
-    """
+    """Safely add or remove copper `(segment ...)`, `(via ...)`, and multi-pad `buses` with validated net IDs."""
     source, dest, lock_info = _resolve_target_and_output(pcb_path, output_path, suffix="_traces")
     text = source.read_text(encoding="utf-8")
     name_to_id, id_to_name, uses_int_ids = _parse_net_map(text)
@@ -1016,9 +1005,39 @@ def edit_pcb_traces(
         kept_parts.append(text[last_pos:])
         text = "".join(kept_parts)
 
+    expanded_segments = list(add_segments or [])
+    if buses:
+        tree_tmp = pcb_inspector._parse_sexpr(text)
+        net_map_tmp = pcb_inspector._extract_net_map(tree_tmp)
+        _, all_pads_tmp = pcb_inspector._parse_footprints_and_pads(tree_tmp, net_map_tmp)
+        pad_lookup = {(p["reference"], str(p["pad_number"])): p for p in all_pads_tmp}
+        for bus in buses:
+            bnet = str(bus["net"])
+            blayer = str(bus.get("layer", "F.Cu"))
+            bwidth = float(bus.get("width", 0.3))
+            baxis = str(bus.get("axis", "auto")).lower()
+            pts: list[tuple[float, float]] = []
+            for pin in bus.get("pins", []):
+                p = pad_lookup.get((str(pin["reference"]), str(pin.get("pad", pin.get("pad_number", "1")))))
+                if p:
+                    pts.append((float(p["x"]), float(p["y"])))
+            if len(pts) < 2:
+                continue
+            span_x = max(x for x, _ in pts) - min(x for x, _ in pts)
+            span_y = max(y for _, y in pts) - min(y for _, y in pts)
+            use_x = (baxis == "x") or (baxis == "auto" and span_x >= span_y)
+            pts.sort(key=(lambda pt: (pt[0], pt[1])) if use_x else (lambda pt: (pt[1], pt[0])))
+            for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
+                if abs(x1 - x2) > 1e-4 and abs(y1 - y2) > 1e-4:
+                    mid = [x2, y1] if use_x else [x1, y2]
+                    expanded_segments.append({"start": [x1, y1], "end": mid, "width": bwidth, "layer": blayer, "net": bnet})
+                    expanded_segments.append({"start": mid, "end": [x2, y2], "width": bwidth, "layer": blayer, "net": bnet})
+                else:
+                    expanded_segments.append({"start": [x1, y1], "end": [x2, y2], "width": bwidth, "layer": blayer, "net": bnet})
+
     new_blocks: list[str] = []
     added_seg_count = 0
-    for seg in add_segments or []:
+    for seg in expanded_segments:
         sx, sy = float(seg["start"][0]), float(seg["start"][1])
         ex, ey = float(seg["end"][0]), float(seg["end"][1])
         if math.hypot(ex - sx, ey - sy) < 1e-4:
@@ -1174,13 +1193,45 @@ def _simplify_grid_path(
     return segments, vias
 
 
+def _discover_java_bin() -> Path | None:
+    """Locate `java` on PATH, JAVA_HOME, or standard Windows/macOS/Linux JDK/JRE folders."""
+    on_path = shutil.which("java")
+    if on_path:
+        return Path(on_path)
+    java_home = os.environ.get("JAVA_HOME")
+    if java_home:
+        for exe in ("java.exe", "java"):
+            cand = Path(java_home) / "bin" / exe
+            if cand.is_file():
+                return cand
+    win_roots = [
+        Path(r"C:\Java"),
+        Path(r"C:\Program Files\Java"),
+        Path(r"C:\Program Files\Eclipse Adoptium"),
+        Path(r"C:\Program Files\Microsoft"),
+        Path(r"C:\Program Files\Zulu"),
+        Path(r"C:\Program Files\BellSoft"),
+    ]
+    for root in win_roots:
+        if not root.is_dir():
+            continue
+        for sub in sorted(root.iterdir(), key=lambda p: p.name, reverse=True):
+            cand = sub / "bin" / "java.exe"
+            if cand.is_file():
+                return cand
+    for unix_cand in (Path("/usr/bin/java"), Path("/usr/local/bin/java")):
+        if unix_cand.is_file():
+            return unix_cand
+    return None
+
+
 def _discover_freerouting_env(
     freerouting_jar: str | None = None,
 ) -> tuple[Path | None, Path | None, Path | None, str | None]:
     """Locate `java`, `freerouting.jar`, and KiCad's bundled `python` with `pcbnew`."""
-    java_bin = shutil.which("java")
+    java_bin = _discover_java_bin()
     if not java_bin:
-        return None, None, None, "java executable not found on PATH"
+        return None, None, None, "java executable not found on PATH or standard JDK directories"
 
     jar_candidates: list[Path] = []
     if freerouting_jar:
@@ -1543,7 +1594,19 @@ def autoroute_pcb_nets(
         (-1, -1, 1.4142),
     ]
 
-    for net_name, net_pads in sorted(pads_by_net.items()):
+    def _net_route_priority(item: tuple[str, list[dict[str, Any]]]) -> tuple[int, float, int, str]:
+        """Order nets so short/critical signals route first and long power/GND rails route last."""
+        nname, npads = item
+        upper = nname.upper()
+        is_pwr = 2 if (upper in {"GND", "VSS", "VCC", "VDD"} or upper.startswith(("+", "PWR", "VIN", "VBUS"))) else (
+            0 if any(tok in upper for tok in ("XTAL", "SDA", "SCL", "CLK")) else 1
+        )
+        xs = [float(p["x"]) for p in npads]
+        ys = [float(p["y"]) for p in npads]
+        hpwl = (max(xs) - min(xs)) + (max(ys) - min(ys)) if npads else 0.0
+        return (is_pwr, hpwl, len(npads), nname)
+
+    for net_name, net_pads in sorted(pads_by_net.items(), key=_net_route_priority):
         if len(net_pads) < 2:
             continue
 
