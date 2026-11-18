@@ -1425,6 +1425,153 @@ def _prepare_staged_kicad_pro(
     dst_pro.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def update_trace_widths(
+    pcb_path: str,
+    net_widths: dict[str, float] | None = None,
+    min_width_mm: float = 0.2,
+    adaptive_neckdown: bool = True,
+    neckdown_radius_mm: float = 2.5,
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    """Safely update widths of existing `(segment ...)` tracks by net, enforcing `min_width_mm` and optional pad neckdown."""
+    source, dest, lock_info = _resolve_target_and_output(pcb_path, output_path, suffix="_widths")
+    text = source.read_text(encoding="utf-8")
+    name_to_id, id_to_name, _uses_int = _parse_net_map(text)
+
+    pads_by_net: dict[str, list[dict[str, Any]]] = {}
+    if adaptive_neckdown and net_widths:
+        tree_tmp = pcb_inspector._parse_sexpr(text)
+        net_map_tmp = pcb_inspector._extract_net_map(tree_tmp)
+        _, all_pads_tmp = pcb_inspector._parse_footprints_and_pads(tree_tmp, net_map_tmp)
+        for p in all_pads_tmp:
+            pnet = str(p.get("net", ""))
+            if pnet:
+                pads_by_net.setdefault(pnet, []).append(p)
+
+    target_widths = {str(k): float(v) for k, v in (net_widths or {}).items()}
+    blocks = _extract_top_level_blocks(text, {"segment"})
+    kept_parts: list[str] = []
+    last_pos = 0
+    updated_count = 0
+    clamped_min_count = 0
+
+    for start_idx, end_idx, _tag, blk in blocks:
+        m_w = re.search(r"\(width\s+([-\d.]+)\)", blk)
+        if not m_w:
+            continue
+        cur_w = float(m_w.group(1))
+        m_net_str = re.search(r'\(net\s+"([^"]+)"\)', blk)
+        m_net_int = re.search(r"\(net\s+(\d+)\)", blk)
+        seg_net = (
+            m_net_str.group(1)
+            if m_net_str
+            else (id_to_name.get(int(m_net_int.group(1)), "") if m_net_int else "")
+        )
+
+        desired_w = cur_w
+        if seg_net in target_widths:
+            desired_w = target_widths[seg_net]
+            if adaptive_neckdown and seg_net in pads_by_net:
+                m_st = re.search(r"\(start\s+([-\d.]+)\s+([-\d.]+)\)", blk)
+                m_en = re.search(r"\(end\s+([-\d.]+)\s+([-\d.]+)\)", blk)
+                if m_st and m_en:
+                    x1, y1 = float(m_st.group(1)), float(m_st.group(2))
+                    x2, y2 = float(m_en.group(1)), float(m_en.group(2))
+                    seg_len = math.hypot(x2 - x1, y2 - y1)
+                    if seg_len <= neckdown_radius_mm:
+                        for pad in pads_by_net[seg_net]:
+                            px, py = float(pad["x"]), float(pad["y"])
+                            if min(math.hypot(x1 - px, y1 - py), math.hypot(x2 - px, y2 - py)) <= 0.6:
+                                pdim = min(float(pad.get("raw_size_x", pad.get("size_x", desired_w))), float(pad.get("raw_size_y", pad.get("size_y", desired_w))))
+                                if pdim < desired_w:
+                                    desired_w = min(desired_w, max(min_width_mm, pdim * 0.85))
+        if min_width_mm > 0 and desired_w < min_width_mm:
+            desired_w = min_width_mm
+            clamped_min_count += 1
+
+        desired_w = round(desired_w, 4)
+        if abs(desired_w - cur_w) > 1e-4:
+            new_blk = re.sub(r"\(width\s+[-\d.]+\)", f"(width {desired_w:g})", blk, count=1)
+            kept_parts.append(text[last_pos:start_idx])
+            kept_parts.append(new_blk)
+            last_pos = end_idx
+            updated_count += 1
+
+    kept_parts.append(text[last_pos:])
+    dest.write_text("".join(kept_parts), encoding="utf-8")
+    return {
+        "status": "ok" if dest == source else "ok_staged",
+        "source_pcb": str(source),
+        "saved_path": str(dest),
+        "updated_segments": updated_count,
+        "clamped_to_min_width": clamped_min_count,
+        "min_width_mm": min_width_mm,
+        "lock_files": lock_info.get("lock_files", []),
+    }
+
+
+def _patch_dsn_net_rules(
+    dsn_path: Path,
+    trace_width_mm: float,
+    clearance_mm: float,
+    net_widths: dict[str, float] | None,
+    min_width_mm: float = 0.2,
+) -> None:
+    """Patch Specctra `.dsn` net classes so Freerouting honors `net_widths` and `min_width_mm`."""
+    text = dsn_path.read_text(encoding="utf-8")
+    unit_scale = 1000.0 if re.search(r"\(unit\s+um\)", text) else 1.0
+    def_w = max(float(trace_width_mm), float(min_width_mm)) * unit_scale
+    def_clr = max(float(clearance_mm), 0.15) * unit_scale
+
+    m_via = re.search(r"\(use_via\s+([^\)]+)\)", text)
+    via_clause = f"(circuit (use_via {m_via.group(1)}))" if m_via else ""
+
+    m_def_cls = re.search(r"\(class\s+kicad_default\b", text)
+    if not m_def_cls:
+        return
+
+    start = m_def_cls.start()
+    depth = 0
+    end = start
+    in_q = False
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if ch == '"':
+            in_q = not in_q
+        elif not in_q:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    end = idx + 1
+                    break
+
+    def_block = text[start:end]
+    def_block = re.sub(r"\(width\s+[\d.]+\)", f"(width {round(def_w, 2):g})", def_block)
+    def_block = re.sub(r"\(clearance\s+[\d.]+\)", f"(clearance {round(def_clr, 2):g})", def_block)
+
+    extra_classes: list[str] = []
+    for idx, (net_name, w_mm) in enumerate(sorted((net_widths or {}).items())):
+        w_scaled = max(float(w_mm), float(min_width_mm)) * unit_scale
+        quoted = f'"{net_name}"'
+        bare_pat = rf'(?<!\S)(?:{re.escape(quoted)}|{re.escape(net_name)})(?!\S)'
+        if re.search(bare_pat, def_block):
+            def_block = re.sub(bare_pat, "", def_block, count=1)
+            extra_classes.append(
+                f"\n    (class mcp_w_{idx} {quoted}\n"
+                f"      {via_clause}\n"
+                f"      (rule\n"
+                f"        (width {round(w_scaled, 2):g})\n"
+                f"        (clearance {round(def_clr, 2):g})\n"
+                f"      )\n"
+                f"    )"
+            )
+
+    patched = text[:start] + def_block + "".join(extra_classes) + text[end:]
+    dsn_path.write_text(patched, encoding="utf-8")
+
+
 def _run_freerouting(
     source_pcb: Path,
     dest_pcb: Path,
@@ -1437,8 +1584,9 @@ def _run_freerouting(
     via_size_mm: float = 0.6,
     via_drill_mm: float = 0.3,
     net_widths: dict[str, float] | None = None,
+    min_track_width_mm: float = 0.2,
 ) -> dict[str, Any]:
-    """Export DSN via KiCad `pcbnew`, autoroute via Freerouting CLI, and import SES into `dest_pcb`."""
+    """Export DSN via KiCad `pcbnew`, patch DSN rules, autoroute via Freerouting CLI, and import SES into `dest_pcb`."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         tdir = Path(tmp_dir)
         staged_pcb = tdir / source_pcb.name
@@ -1470,6 +1618,14 @@ def _run_freerouting(
         if res_exp.returncode != 0 or not dsn_path.is_file():
             raise RuntimeError(f"Specctra DSN export failed: {res_exp.stderr or res_exp.stdout}")
 
+        _patch_dsn_net_rules(
+            dsn_path,
+            trace_width_mm=trace_width_mm,
+            clearance_mm=clearance_mm,
+            net_widths=net_widths,
+            min_width_mm=min_track_width_mm,
+        )
+
         res_fr = subprocess.run(
             [str(java_bin), "-jar", str(jar_path), "-de", str(dsn_path), "-do", str(ses_path), "-mp", "20"],
             capture_output=True,
@@ -1495,6 +1651,15 @@ def _run_freerouting(
         if res_imp.returncode != 0 or not dest_pcb.is_file():
             raise RuntimeError(f"Specctra SES import failed: {res_imp.stderr or res_imp.stdout}")
 
+    if min_track_width_mm > 0:
+        update_trace_widths(
+            str(dest_pcb),
+            net_widths=None,
+            min_width_mm=min_track_width_mm,
+            adaptive_neckdown=False,
+            output_path=str(dest_pcb),
+        )
+
     return {"status": "ok", "saved_path": str(dest_pcb)}
 
 
@@ -1513,8 +1678,10 @@ def autoroute_pcb_nets(
     router: str = "auto",
     freerouting_jar: str | None = None,
     freerouting_timeout_s: int = 120,
+    min_track_width_mm: float = 0.2,
+    cleanup_with_astar: bool = False,
 ) -> dict[str, Any]:
-    """Autoroute unrouted connections using Freerouting (when available) with automatic Python A* cleanup/fallback."""
+    """Autoroute unrouted connections using Freerouting (with DSN net-width rules) or built-in Python A*."""
     source = Path(pcb_path).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(f"PCB file does not exist: {source}")
@@ -1540,6 +1707,7 @@ def autoroute_pcb_nets(
                     via_size_mm=via_size_mm,
                     via_drill_mm=via_drill_mm,
                     net_widths=net_widths,
+                    min_track_width_mm=min_track_width_mm,
                 )
                 zones_refilled = False
                 if "(zone" in dest_pcb.read_text(encoding="utf-8"):
@@ -1565,7 +1733,7 @@ def autoroute_pcb_nets(
                         if p.get("net") and (not nets or p["net"] in set(nets))
                     }
                 )
-                if remaining_nets and router_mode == "auto":
+                if remaining_nets and router_mode == "auto" and cleanup_with_astar:
                     cleanup_res = autoroute_pcb_nets(
                         pcb_path=str(dest_pcb),
                         nets=remaining_nets,
@@ -1622,10 +1790,15 @@ def autoroute_pcb_nets(
     }
     unrouted_info = pcb_inspector.find_unrouted_pads(str(source))
 
-    min_x = float(bbox["min_x"]) - 1.0
-    min_y = float(bbox["min_y"]) - 1.0
-    max_x = float(bbox["max_x"]) + 1.0
-    max_y = float(bbox["max_y"]) + 1.0
+    edge_margin = max(0.5, clearance_mm + trace_width_mm * 0.5)
+    min_x = float(bbox["min_x"]) + edge_margin
+    min_y = float(bbox["min_y"]) + edge_margin
+    max_x = float(bbox["max_x"]) - edge_margin
+    max_y = float(bbox["max_y"]) - edge_margin
+    if max_x <= min_x:
+        min_x, max_x = float(bbox["min_x"]), float(bbox["max_x"])
+    if max_y <= min_y:
+        min_y, max_y = float(bbox["min_y"]), float(bbox["max_y"])
 
     step = max(0.2, float(grid_step_mm))
     nx = int(math.ceil((max_x - min_x) / step)) + 1

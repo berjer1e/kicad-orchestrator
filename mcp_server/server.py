@@ -334,12 +334,15 @@ def pcb_traces(
     via_drill_mm: float = 0.3,
     net_widths: dict[str, float] | None = None,
     auto_neckdown: bool = True,
+    min_width_mm: float = 0.2,
+    neckdown_radius_mm: float = 2.5,
     router: str = "auto",
     freerouting_jar: str | None = None,
     freerouting_timeout_s: int = 120,
+    cleanup_with_astar: bool = False,
     force_when_locked: bool = False,
 ) -> dict[str, Any]:
-    """Manage copper routing: `edit` (segments/vias/buses/clear), `autoroute` (Freerouting + A* fallback), or `refill_zones`."""
+    """Manage copper routing: `edit` (segments/vias/buses/clear), `widen` (update_widths with adaptive neckdown), `autoroute` (Freerouting DSN rules + A* fallback), or `refill_zones`."""
     act = action.strip().lower()
     if act in ("edit", "add", "clear", "buses"):
         return pcb_editor.edit_pcb_traces(
@@ -350,7 +353,16 @@ def pcb_traces(
             clear_bbox=clear_bbox,
             output_path=output_path,
             buses=buses,
-            clear_all=clear_all or act == "clear" and not clear_nets and not clear_bbox,
+            clear_all=clear_all or (act == "clear" and not clear_nets and not clear_bbox),
+        )
+    if act in ("widen", "widen_nets", "update_widths"):
+        return pcb_editor.update_trace_widths(
+            pcb_path=pcb_path,
+            net_widths=net_widths,
+            min_width_mm=min_width_mm,
+            adaptive_neckdown=auto_neckdown,
+            neckdown_radius_mm=neckdown_radius_mm,
+            output_path=output_path,
         )
     if act == "autoroute":
         return pcb_editor.autoroute_pcb_nets(
@@ -368,6 +380,8 @@ def pcb_traces(
             router=router,
             freerouting_jar=freerouting_jar,
             freerouting_timeout_s=freerouting_timeout_s,
+            min_track_width_mm=min_width_mm,
+            cleanup_with_astar=cleanup_with_astar,
         )
     if act in ("refill_zones", "refill"):
         return _get_cli().refill_pcb_zones(
@@ -375,7 +389,7 @@ def pcb_traces(
             output_path=output_path,
             force_when_locked=force_when_locked,
         )
-    return {"status": "error", "error": f"Unsupported pcb_traces action '{action}'. Use: edit, autoroute, refill_zones."}
+    return {"status": "error", "error": f"Unsupported pcb_traces action '{action}'. Use: edit, widen, autoroute, refill_zones."}
 
 
 @mcp.tool()
@@ -501,13 +515,22 @@ def run_validations(
     save_board: bool = False,
     compact: bool = True,
     errors_only: bool = False,
+    pcb_path: str = "",
 ) -> dict[str, Any]:
     """Run KiCad DRC, ERC, footprint/symbol SVG validation, lock check, or CLI version lookup."""
     cli = _get_cli()
     kind = validation_type.strip().lower()
+    resolved_target = target_path.strip() or pcb_path.strip()
+    if kind == "version":
+        return {"status": "ok", "kicad_version": cli.get_version()}
+    if not resolved_target:
+        return {
+            "status": "error",
+            "error": f"target_path (or pcb_path) is required for validation_type='{validation_type}'.",
+        }
     if kind == "drc":
         return cli.run_drc(
-            pcb_path=target_path,
+            pcb_path=resolved_target,
             output_path=output_path,
             schematic_parity=schematic_parity,
             refill_zones=refill_zones,
@@ -517,19 +540,17 @@ def run_validations(
         )
     if kind == "erc":
         return cli.run_erc(
-            sch_path=target_path,
+            sch_path=resolved_target,
             output_path=output_path,
             compact=compact,
             errors_only=errors_only,
         )
     if kind == "footprint":
-        return cli.validate_footprint(fp_path=target_path, output_dir=output_path)
+        return cli.validate_footprint(fp_path=resolved_target, output_dir=output_path)
     if kind == "symbol":
-        return cli.validate_symbol(sym_path=target_path, output_dir=output_path)
+        return cli.validate_symbol(sym_path=resolved_target, output_dir=output_path)
     if kind in ("locks", "lock"):
-        return pcb_inspector.check_kicad_lock_files(target_path=target_path)
-    if kind == "version":
-        return {"status": "ok", "kicad_version": cli.get_version()}
+        return pcb_inspector.check_kicad_lock_files(target_path=resolved_target)
     return {
         "status": "error",
         "error": f"Unsupported validation_type '{validation_type}'. Use one of: drc, erc, footprint, symbol, locks, version.",
