@@ -689,14 +689,18 @@ def edit_pcb_layout(
     auto_fit_outline: dict[str, Any] | float | None = None,
     clean_silkscreen: bool | dict[str, Any] = False,
     graphics: list[dict[str, Any]] | None = None,
+    remove_footprints: list[str] | None = None,
+    clear_graphics_layers: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Safely update board outline (`Edge.Cuts`), footprint placements/replacements, silkscreen, and copper zones."""
+    """Safely update Edge.Cuts, footprint placements/replacements/removals, silkscreen/graphics, and copper zones."""
     source, dest, lock_info = _resolve_target_and_output(pcb_path, output_path, suffix="_layout")
     text = source.read_text(encoding="utf-8")
     name_to_id, id_to_name, uses_int_ids = _parse_net_map(text)
 
     placements = footprint_placements or {}
     replacements = replace_footprints or {}
+    removals = {str(r).strip() for r in (remove_footprints or []) if str(r).strip()}
+    clear_gfx_layers = {str(lyr).strip() for lyr in (clear_graphics_layers or []) if str(lyr).strip()}
     fit_cfg: dict[str, Any] | None = None
     if auto_fit_outline is not None:
         fit_cfg = (
@@ -724,21 +728,32 @@ def edit_pcb_layout(
                     zlayer = str(zspec.get("layer", "B.Cu"))
                     replace_zone_keys.add((znet, zlayer))
 
-    tags_to_scan = {"footprint", "gr_rect", "gr_line", "gr_arc", "gr_poly", "zone"}
+    tags_to_scan = {"footprint", "gr_text", "gr_rect", "gr_line", "gr_arc", "gr_circle", "gr_poly", "zone"}
     blocks = _extract_top_level_blocks(text, tags_to_scan)
 
     kept_parts: list[str] = []
     last_pos = 0
     moved_refs: list[str] = []
     replaced_refs: list[str] = []
+    removed_refs: list[str] = []
     cleaned_silk_count = 0
     removed_edge_items = 0
+    removed_gfx_items = 0
     removed_zones = 0
 
     for start_idx, end_idx, tag, blk in blocks:
-        if tag == "footprint" and (placements or replacements or do_clean_silk):
-            m_ref = re.search(r'\(property\s+"Reference"\s+"([^"]+)"', blk)
+        if tag == "footprint" and (placements or replacements or removals or do_clean_silk):
+            m_ref = re.search(r'\(property\s+"Reference"\s+"([^"]+)"', blk) or re.search(
+                r'\(fp_text\s+reference\s+"([^"]+)"', blk
+            )
             ref = m_ref.group(1) if m_ref else None
+            if ref and ref in removals:
+                kept_parts.append(text[last_pos:start_idx].rstrip("\t"))
+                if kept_parts[-1].endswith("\n"):
+                    kept_parts[-1] = kept_parts[-1][:-1]
+                last_pos = end_idx
+                removed_refs.append(ref)
+                continue
             if ref and (ref in replacements or ref in placements or do_clean_silk):
                 new_blk = blk
                 if ref in replacements:
@@ -756,13 +771,18 @@ def edit_pcb_layout(
                 kept_parts.append(new_blk)
                 last_pos = end_idx
                 continue
-        elif tag in {"gr_rect", "gr_line", "gr_arc", "gr_poly"} and clear_edges:
-            if '(layer "Edge.Cuts")' in blk:
+        elif tag in {"gr_text", "gr_rect", "gr_line", "gr_arc", "gr_circle", "gr_poly"}:
+            m_lyr = re.search(r'\(layer\s+"([^"]+)"\)', blk)
+            lyr_name = m_lyr.group(1) if m_lyr else ""
+            if (clear_edges and lyr_name == "Edge.Cuts") or (lyr_name in clear_gfx_layers):
                 kept_parts.append(text[last_pos:start_idx].rstrip("\t"))
                 if kept_parts[-1].endswith("\n"):
                     kept_parts[-1] = kept_parts[-1][:-1]
                 last_pos = end_idx
-                removed_edge_items += 1
+                if lyr_name == "Edge.Cuts":
+                    removed_edge_items += 1
+                else:
+                    removed_gfx_items += 1
                 continue
         elif tag == "zone" and replace_zone_keys:
             m_zn_str = re.search(r'\(net_name\s+"([^"]+)"\)|\(net\s+"([^"]+)"\)', blk)
@@ -847,10 +867,12 @@ def edit_pcb_layout(
         "modified_in_place": dest == source,
         "moved_footprints": sorted(moved_refs),
         "replaced_footprints": sorted(replaced_refs),
+        "removed_footprints": sorted(removed_refs),
         "cleaned_silkscreen_items": cleaned_silk_count,
         "fitted_outline": effective_outline,
         "missing_footprints": sorted(set(placements) - set(moved_refs)),
         "removed_edge_items": removed_edge_items,
+        "removed_graphics_items": removed_gfx_items,
         "added_edge_items": len(_format_edge_cuts(effective_outline)) if effective_outline else 0,
         "removed_zones": removed_zones,
         "added_zones": added_zones,
@@ -973,6 +995,7 @@ def edit_pcb_traces(
     clear_bbox: dict[str, Any] | None = None,
     output_path: str | None = None,
     buses: list[dict[str, Any]] | None = None,
+    clear_all: bool = False,
 ) -> dict[str, Any]:
     """Safely add or remove copper `(segment ...)`, `(via ...)`, and multi-pad `buses` with validated net IDs."""
     source, dest, lock_info = _resolve_target_and_output(pcb_path, output_path, suffix="_traces")
@@ -988,12 +1011,12 @@ def edit_pcb_traces(
 
     removed_segments = 0
     removed_vias = 0
-    if clear_net_ids or clear_bbox:
+    if clear_all or clear_net_ids or clear_bbox:
         blocks = _extract_top_level_blocks(text, {"segment", "via"})
         kept_parts: list[str] = []
         last_pos = 0
         for start_idx, end_idx, tag, blk in blocks:
-            if _item_matches_removal(blk, clear_net_ids, clear_net_names, clear_bbox):
+            if clear_all or _item_matches_removal(blk, clear_net_ids, clear_net_names, clear_bbox):
                 kept_parts.append(text[last_pos:start_idx].rstrip("\t"))
                 if kept_parts[-1].endswith("\n"):
                     kept_parts[-1] = kept_parts[-1][:-1]

@@ -162,6 +162,55 @@ def _label(name: str, x: float, y: float) -> str:
     )
 
 
+def _remove_schematic_symbols_by_ref(sch_text: str, remove_refs: set[str]) -> tuple[str, list[str]]:
+    """Remove top-level `(symbol ...)` blocks matching `remove_refs` from a `.kicad_sch` string."""
+    removed: list[str] = []
+    out_parts: list[str] = []
+    last = 0
+    idx = 0
+    n = len(sch_text)
+    while idx < n:
+        pos = sch_text.find("\t(symbol\n", idx)
+        if pos == -1:
+            pos = sch_text.find("\t(symbol ", idx)
+        if pos == -1:
+            break
+        start = pos + 1
+        depth = 0
+        quoted = False
+        escaped = False
+        j = start
+        while j < n:
+            ch = sch_text[j]
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    quoted = False
+            elif ch == '"':
+                quoted = True
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    j += 1
+                    break
+            j += 1
+        block = sch_text[start:j]
+        m_ref = re.search(r'\(property\s+"Reference"\s+"([^"]+)"', block)
+        ref = m_ref.group(1) if m_ref else None
+        if ref and ref in remove_refs:
+            out_parts.append(sch_text[last:pos])
+            last = j
+            removed.append(ref)
+        idx = j
+    out_parts.append(sch_text[last:])
+    return "".join(out_parts), removed
+
+
 def create_schematic(
     output_path: str,
     project_name: str,
@@ -169,11 +218,12 @@ def create_schematic(
     nets: list[dict[str, Any]],
     title: str = "",
     append: bool = False,
+    remove_references: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Create a KiCad 10 schematic or append new components/nets to an existing `.kicad_sch`."""
+    """Create a KiCad 10 schematic or incrementally append/remove symbols and nets in an existing `.kicad_sch`."""
     if not project_name.strip():
         raise ValueError("project_name must be non-empty.")
-    if not components:
+    if not components and not (append and remove_references):
         raise ValueError("At least one component is required.")
     component_by_ref = {str(item["reference"]): item for item in components}
     if len(component_by_ref) != len(components):
@@ -295,6 +345,11 @@ def create_schematic(
                 new_wires.append(_label(name, px + 5.08, py))
 
         updated = existing
+        removed_refs: list[str] = []
+        if remove_references:
+            updated, removed_refs = _remove_schematic_symbols_by_ref(
+                updated, {str(r).strip() for r in remove_references if str(r).strip()}
+            )
         if new_defs:
             lib_close = re.search(r"\n\t\)\s*\n\t\((?:symbol|wire|label|sheet_instances)\b", updated)
             if lib_close:
@@ -311,6 +366,7 @@ def create_schematic(
             "mode": "append",
             "output_path": str(destination),
             "project_name": project_name,
+            "removed_references": removed_refs,
             "component_count": len(components),
             "net_count": len(nets),
             "connection_count": sum(len(net.get("connections", [])) for net in nets),

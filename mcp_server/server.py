@@ -395,8 +395,10 @@ def edit_pcb_layout(
     auto_fit_outline: dict[str, Any] | float | None = None,
     clean_silkscreen: bool | dict[str, Any] = False,
     graphics: list[dict[str, Any]] | None = None,
+    remove_footprints: list[str] | None = None,
+    clear_graphics_layers: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Update Edge.Cuts (`board_outline` `{x,y,width,height,corner_radius_mm}` or `auto_fit_outline`), footprints (`footprint_placements`, `replace_footprints`), `zones` (`{net,layer,x,y,width,height}` or `{min_x,min_y,max_x,max_y}` or `{points}` or auto board bbox), `clean_silkscreen`, and `graphics` (`[{type:'text'|'rect'|'line', ...}]`)."""
+    """Update Edge.Cuts (`board_outline` or `auto_fit_outline`), footprints (`footprint_placements`, `replace_footprints`, `remove_footprints`), `zones`, `clean_silkscreen`, `clear_graphics_layers`, and `graphics`."""
     return pcb_editor.edit_pcb_layout(
         pcb_path=pcb_path,
         board_outline=board_outline,
@@ -407,6 +409,8 @@ def edit_pcb_layout(
         auto_fit_outline=auto_fit_outline,
         clean_silkscreen=clean_silkscreen,
         graphics=graphics,
+        remove_footprints=remove_footprints,
+        clear_graphics_layers=clear_graphics_layers,
     )
 
 
@@ -499,10 +503,11 @@ def create_schematic(
     nets: list[dict[str, Any]],
     title: str = "",
     append: bool = False,
+    remove_references: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Generate a KiCad 10 schematic or append new components/nets to an existing `.kicad_sch`."""
+    """Generate a KiCad 10 schematic or incrementally append/remove symbols and nets in an existing `.kicad_sch`."""
     return schematic_generator.create_schematic(
-        output_path, project_name, components, nets, title, append=append
+        output_path, project_name, components, nets, title, append=append, remove_references=remove_references
     )
 
 
@@ -515,8 +520,9 @@ def edit_pcb_traces(
     clear_bbox: dict[str, Any] | None = None,
     output_path: str | None = None,
     buses: list[dict[str, Any]] | None = None,
+    clear_all: bool = False,
 ) -> dict[str, Any]:
-    """Add or remove copper `(segment ...)`, `(via ...)`, and multi-pad `buses` (`[{net, pins, layer, width, axis}]`)."""
+    """Add or remove copper `(segment ...)`, `(via ...)`, `buses`, or `clear_all` traces with KiCad-safe net encoding."""
     return pcb_editor.edit_pcb_traces(
         pcb_path=pcb_path,
         add_segments=add_segments,
@@ -525,6 +531,7 @@ def edit_pcb_traces(
         clear_bbox=clear_bbox,
         output_path=output_path,
         buses=buses,
+        clear_all=clear_all,
     )
 
 
