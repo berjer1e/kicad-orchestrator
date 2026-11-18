@@ -1686,6 +1686,18 @@ def autoroute_pcb_nets(
     if not source.is_file():
         raise FileNotFoundError(f"PCB file does not exist: {source}")
 
+    effective_net_widths: dict[str, float] = {}
+    try:
+        import electrical_editor
+
+        board_net_names = list(_parse_net_map(source.read_text(encoding="utf-8"))[0].keys())
+        effective_net_widths.update(electrical_editor.resolve_net_widths_from_pro(str(source), board_net_names))
+    except Exception:
+        pass
+    if net_widths:
+        effective_net_widths.update({str(k): float(v) for k, v in net_widths.items()})
+    net_widths = effective_net_widths or None
+
     router_mode = str(router).strip().lower()
     fallback_reason: str | None = None
     router_used = "astar"

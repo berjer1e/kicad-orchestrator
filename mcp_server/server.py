@@ -282,9 +282,21 @@ def pcb_nets(
     netlist_path: str = "",
     gnd_zone: dict[str, Any] | None = None,
     strict: bool = True,
+    preset: str = "standard_2layer",
+    classes: list[dict[str, Any]] | None = None,
+    patterns: list[dict[str, str]] | None = None,
+    min_track_width_mm: float = 0.2,
 ) -> dict[str, Any]:
-    """Manage PCB nets: `create_manifest` JSON, `declare` nets, `assign` pad nets (auto-UUID), or `apply` netlist manifest."""
+    """Manage PCB nets & netclasses: `create_manifest`, `declare`, `assign` (auto-UUID), `apply`, or `set_netclasses` (`standard_2layer`|`dense_smd`|`high_current`)."""
     act = action.strip().lower()
+    if act in ("set_netclasses", "netclasses"):
+        return electrical_editor.set_netclasses(
+            pcb_path=pcb_path,
+            preset=preset,
+            classes=classes,
+            patterns=patterns,
+            min_track_width_mm=min_track_width_mm,
+        )
     if act in ("create_manifest", "create_netlist"):
         return electrical_editor.create_netlist_from_bom(
             output_path=output_path or netlist_path,

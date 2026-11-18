@@ -7,11 +7,71 @@ formats are supported here without importing ``pcbnew``.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import uuid
 from pathlib import Path
 from typing import Any
+
+NETCLASS_PRESETS: dict[str, dict[str, Any]] = {
+    "standard_2layer": {
+        "classes": [
+            {"name": "Default", "track_width": 0.25, "clearance": 0.25, "via_diameter": 0.6, "via_drill": 0.3},
+            {"name": "Signal", "track_width": 0.25, "clearance": 0.20, "via_diameter": 0.6, "via_drill": 0.3},
+            {"name": "Bus", "track_width": 0.30, "clearance": 0.25, "via_diameter": 0.6, "via_drill": 0.3},
+            {"name": "Clock", "track_width": 0.25, "clearance": 0.25, "via_diameter": 0.6, "via_drill": 0.3},
+            {"name": "Power", "track_width": 0.80, "clearance": 0.25, "via_diameter": 0.8, "via_drill": 0.4},
+            {"name": "Power_High", "track_width": 1.50, "clearance": 0.30, "via_diameter": 1.0, "via_drill": 0.5},
+        ],
+        "patterns": [
+            {"pattern": "*VBAT*", "netclass": "Power_High"},
+            {"pattern": "*VBUS*", "netclass": "Power_High"},
+            {"pattern": "*BATT*", "netclass": "Power_High"},
+            {"pattern": "+12V*", "netclass": "Power_High"},
+            {"pattern": "+24V*", "netclass": "Power_High"},
+            {"pattern": "PWR*", "netclass": "Power_High"},
+            {"pattern": "+5V*", "netclass": "Power"},
+            {"pattern": "+3V3*", "netclass": "Power"},
+            {"pattern": "VCC*", "netclass": "Power"},
+            {"pattern": "VDD*", "netclass": "Power"},
+            {"pattern": "GND*", "netclass": "Power"},
+            {"pattern": "VSS*", "netclass": "Power"},
+            {"pattern": "*XTAL*", "netclass": "Clock"},
+            {"pattern": "*CLK*", "netclass": "Clock"},
+            {"pattern": "*SCK*", "netclass": "Clock"},
+            {"pattern": "*SDA*", "netclass": "Bus"},
+            {"pattern": "*SCL*", "netclass": "Bus"},
+            {"pattern": "*ROW*", "netclass": "Bus"},
+            {"pattern": "*COL*", "netclass": "Bus"},
+            {"pattern": "/*", "netclass": "Signal"},
+        ],
+    },
+    "dense_smd": {
+        "classes": [
+            {"name": "Default", "track_width": 0.20, "clearance": 0.20, "via_diameter": 0.5, "via_drill": 0.25},
+            {"name": "Signal", "track_width": 0.20, "clearance": 0.18, "via_diameter": 0.5, "via_drill": 0.25},
+            {"name": "Bus", "track_width": 0.25, "clearance": 0.20, "via_diameter": 0.5, "via_drill": 0.25},
+            {"name": "Clock", "track_width": 0.20, "clearance": 0.20, "via_diameter": 0.5, "via_drill": 0.25},
+            {"name": "Power", "track_width": 0.60, "clearance": 0.20, "via_diameter": 0.7, "via_drill": 0.35},
+            {"name": "Power_High", "track_width": 1.20, "clearance": 0.25, "via_diameter": 0.9, "via_drill": 0.45},
+        ],
+        "patterns": [],
+    },
+    "high_current": {
+        "classes": [
+            {"name": "Default", "track_width": 0.30, "clearance": 0.25, "via_diameter": 0.6, "via_drill": 0.3},
+            {"name": "Signal", "track_width": 0.30, "clearance": 0.25, "via_diameter": 0.6, "via_drill": 0.3},
+            {"name": "Bus", "track_width": 0.35, "clearance": 0.25, "via_diameter": 0.6, "via_drill": 0.3},
+            {"name": "Clock", "track_width": 0.30, "clearance": 0.25, "via_diameter": 0.6, "via_drill": 0.3},
+            {"name": "Power", "track_width": 1.20, "clearance": 0.30, "via_diameter": 0.9, "via_drill": 0.45},
+            {"name": "Power_High", "track_width": 2.50, "clearance": 0.35, "via_diameter": 1.2, "via_drill": 0.6},
+        ],
+        "patterns": [],
+    },
+}
+NETCLASS_PRESETS["dense_smd"]["patterns"] = list(NETCLASS_PRESETS["standard_2layer"]["patterns"])
+NETCLASS_PRESETS["high_current"]["patterns"] = list(NETCLASS_PRESETS["standard_2layer"]["patterns"])
 
 try:
     import pcb_editor
@@ -289,3 +349,108 @@ def apply_netlist_to_pcb(
         "missing_assignments": assigned["missing_assignments"],
         **({"error": assigned["error"]} if assigned.get("error") else {}),
     }
+
+
+def set_netclasses(
+    pcb_path: str,
+    preset: str = "standard_2layer",
+    classes: list[dict[str, Any]] | None = None,
+    patterns: list[dict[str, str]] | None = None,
+    min_track_width_mm: float = 0.2,
+) -> dict[str, Any]:
+    """Write KiCad 10 `net_settings.classes`, `netclass_patterns`, and `min_track_width` into `<stem>.kicad_pro`."""
+    pcb = Path(pcb_path).expanduser().resolve()
+    pro_path = pcb.with_suffix(".kicad_pro")
+    data: dict[str, Any] = {}
+    if pro_path.is_file():
+        try:
+            data = json.loads(pro_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+
+    preset_key = str(preset).strip().lower()
+    if preset_key not in NETCLASS_PRESETS:
+        raise ValueError(f"Unknown preset '{preset}'. Use one of: {sorted(NETCLASS_PRESETS)}.")
+    base = NETCLASS_PRESETS[preset_key]
+
+    merged_classes: dict[str, dict[str, Any]] = {
+        str(c["name"]): dict(c) for c in base["classes"]
+    }
+    for custom in classes or []:
+        cname = str(custom["name"]).strip()
+        entry = dict(merged_classes.get(cname, {"name": cname}))
+        entry.update(custom)
+        entry["name"] = cname
+        if "track_width" in entry:
+            entry["track_width"] = max(float(min_track_width_mm), float(entry["track_width"]))
+        merged_classes[cname] = entry
+
+    for entry in merged_classes.values():
+        entry["track_width"] = max(float(min_track_width_mm), float(entry.get("track_width", 0.25)))
+
+    merged_patterns = list(patterns or []) + [
+        p
+        for p in base["patterns"]
+        if not any(str(cp.get("pattern")) == p["pattern"] for cp in (patterns or []))
+    ]
+
+    net_settings = data.setdefault("net_settings", {})
+    net_settings["classes"] = list(merged_classes.values())
+    net_settings["netclass_patterns"] = merged_patterns
+
+    board_cfg = data.setdefault("board", {})
+    design_cfg = board_cfg.setdefault("design_settings", {})
+    rules_cfg = design_cfg.setdefault("rules", {})
+    rules_cfg["min_track_width"] = max(float(min_track_width_mm), float(rules_cfg.get("min_track_width", 0.0)))
+
+    pro_path.parent.mkdir(parents=True, exist_ok=True)
+    pro_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {
+        "status": "ok",
+        "preset": preset_key,
+        "pro_path": str(pro_path),
+        "class_count": len(net_settings["classes"]),
+        "pattern_count": len(merged_patterns),
+        "min_track_width_mm": rules_cfg["min_track_width"],
+    }
+
+
+def resolve_net_widths_from_pro(
+    pcb_path: str,
+    net_names: list[str] | set[str],
+) -> dict[str, float]:
+    """Resolve per-net track widths from `<stem>.kicad_pro` classes, assignments, and glob patterns."""
+    pro_path = Path(pcb_path).expanduser().resolve().with_suffix(".kicad_pro")
+    if not pro_path.is_file():
+        return {}
+    try:
+        data = json.loads(pro_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    net_settings = data.get("net_settings") or {}
+    class_widths: dict[str, float] = {}
+    for cls in net_settings.get("classes") or []:
+        if isinstance(cls, dict) and cls.get("name") and cls.get("track_width") is not None:
+            class_widths[str(cls["name"])] = float(cls["track_width"])
+
+    assignments = net_settings.get("netclass_assignments") or {}
+    patterns = net_settings.get("netclass_patterns") or []
+
+    resolved: dict[str, float] = {}
+    for raw_net in net_names:
+        net = str(raw_net).strip()
+        if not net:
+            continue
+        cls_name = assignments.get(net)
+        if not cls_name:
+            for pat_entry in patterns:
+                if not isinstance(pat_entry, dict):
+                    continue
+                pat = str(pat_entry.get("pattern", ""))
+                if pat and (fnmatch.fnmatchcase(net, pat) or fnmatch.fnmatch(net.upper(), pat.upper())):
+                    cls_name = str(pat_entry.get("netclass", ""))
+                    break
+        if cls_name and cls_name in class_widths:
+            resolved[net] = class_widths[cls_name]
+    return resolved

@@ -14,7 +14,7 @@ Your job is to translate parsed electrical and mechanical requirements (BOM/spec
 
 If `<project_dir>/design_decisions.json` exists, load it first via `manage_design_decisions(project_dir, action="load")` (or inspect it directly) so confirmed copper weight (`1 oz` vs `2 oz`), `display_mounting_mode`, connector orientation/keying, module variants, and silkscreen conventions govern all checks.
 
-**Routing Tool Mandate:** Never write ad-hoc custom Python autorouters (`python -` or `scratch/*.py` routing scripts). Always route through `autoroute_pcb_nets` (which automatically uses `tools/freerouting.jar` / `freerouting.jar` when available and falls back to built-in A* with `net_widths`, `clearance_mm`, and `auto_neckdown`) and `edit_pcb_traces` (via `--args-file` for large payloads).
+**Routing Tool Mandate:** Never write ad-hoc custom Python autorouters (`python -` or `scratch/*.py` routing scripts). Before routing, apply calculated IPC-2221 classes and glob patterns directly into `<stem>.kicad_pro` via `pcb_nets(action="set_netclasses", pcb_path=..., preset="standard_2layer"|"dense_smd"|"high_current", classes=[...], patterns=[...])` instead of only printing a width table in prose. Then route through `pcb_traces(action="autoroute", ...)` (which reads `.kicad_pro` netclasses into Freerouting DSN and A* fallback) and `pcb_traces(action="edit"|"widen", ...)` (via `--args-file` for large payloads).
 
 ## Core Design Checks
 
