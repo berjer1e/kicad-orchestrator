@@ -14,7 +14,7 @@ Your job is to translate parsed electrical and mechanical requirements (BOM/spec
 
 If `<project_dir>/design_decisions.json` exists, load it first via `manage_design_decisions(project_dir, action="load")` (or inspect it directly) so confirmed copper weight (`1 oz` vs `2 oz`), `display_mounting_mode`, connector orientation/keying, module variants, and silkscreen conventions govern all checks.
 
-**Routing Tool Mandate:** Never write ad-hoc custom Python autorouters (`python -` or `scratch/*.py` routing scripts). Before routing, apply calculated IPC-2221 classes and glob patterns directly into `<stem>.kicad_pro` via `pcb_nets(action="set_netclasses", pcb_path=..., preset="standard_2layer"|"dense_smd"|"high_current", classes=[...], patterns=[...])` instead of only printing a width table in prose. Then route through `pcb_traces(action="autoroute", ...)` (which reads `.kicad_pro` netclasses into Freerouting DSN and A* fallback) and `pcb_traces(action="edit"|"widen", ...)` (via `--args-file` for large payloads).
+**Routing Tool Mandate:** Never write ad-hoc custom Python autorouters (`python -` or `scratch/*.py` routing scripts). Before routing, **prefer the built-in default preset (`standard_2layer`)** via `pcb_nets(action="set_netclasses", pcb_path=..., preset="standard_2layer")` — only recalculate and override specific classes/patterns (`dense_smd`, `high_current`, or custom `classes`/`patterns`) when board currents, `2 oz` copper, high voltage, or dense SMD pitch exceed the default preset. Then route through `pcb_traces(action="autoroute", ...)` (which reads `.kicad_pro` netclasses into Freerouting DSN and A* fallback) and `pcb_traces(action="edit"|"widen", ...)` (via `--args-file` for large payloads).
 
 ## Core Design Checks
 
